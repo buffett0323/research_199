@@ -55,7 +55,7 @@ Dataset Structure:
 # Init settings
 wandb_use = True # False
 lr = 1e-3 # 1e-4
-num_epochs = 200
+num_epochs = 500
 batch_size = 8
 n_srcs = 2
 emb_dim = 768 # For BEATs
