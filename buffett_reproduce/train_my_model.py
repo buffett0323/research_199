@@ -53,7 +53,7 @@ Dataset Structure:
 """
 
 # Init settings
-wandb_use = False # False
+wandb_use = True # False
 lr = 1e-3 # 1e-4
 num_epochs = 200
 batch_size = 8
