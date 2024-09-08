@@ -54,6 +54,7 @@ class MyModel(nn.Module):
         bidirectional=True,
         rnn_type="LSTM",
         mix_query_mode="FiLM",
+        q_enc="Passt",
     ):
         super(MyModel, self).__init__()
         
@@ -72,7 +73,7 @@ class MyModel(nn.Module):
         self.F = 512
         self.T = 256
         self.eps = eps
-        
+        self.q_enc = q_enc
         
         self.stft = torchaudio.transforms.Spectrogram(
             n_fft=n_fft,
@@ -108,15 +109,21 @@ class MyModel(nn.Module):
             multiplicative=True
         )
         
-        
-        self.instantiate_beats(beats_check_point_pth='beats/pt_dict/BEATs_iter3_plus_AS2M.pt')
-        
-        self.query_encoder = QueryEncoder(
+        self.query_trans = QueryEncoder(
             in_channels=embedding_size,
             hidden_channels=512,
-            out_channels=256,
-        ) # 768 -> 256
+            out_channels=256, # 768 -> 256
+        )
         
+        if q_enc == "beats":
+            self.instantiate_beats(beats_check_point_pth='beats/pt_dict/BEATs_iter3_plus_AS2M.pt')
+            
+        elif q_enc == "Passt":
+            self.passt = Passt(
+                original_fs=fs,
+                passt_fs=32000,
+            )
+            
         self.unet = UnetIquery(
             fc_dim=64, 
             num_downs=5, 
@@ -151,7 +158,7 @@ class MyModel(nn.Module):
             embed.append(self.beats.extract_features(wav[i].unsqueeze(0), padding_mask=padding_mask)[0].mean(dim=1, keepdim=False))
 
         embed = torch.cat(embed, dim=0)
-        embed = self.query_encoder(embed)
+        embed = self.query_trans(embed)
         return embed
     
     def mask(self, x, m):
@@ -173,7 +180,7 @@ class MyModel(nn.Module):
                     batch.sources[stem].audio = batch.sources[stem].audio[:, :, :SET_LENGTH].mean(dim=1, keepdim=True)
                     # batch.sources[stem].spectrogram = self.stft(batch.sources[stem].audio)
             
-            batch.query.audio = batch.query.audio.mean(dim=1, keepdim=False)
+            # batch.query.audio = batch.query.audio.mean(dim=1, keepdim=False)
                     
         return batch
     
@@ -197,9 +204,12 @@ class MyModel(nn.Module):
         x, x_latent = self.unet(x)
 
         # Query encoder
-        Z = self.adapt_query(batch.query.audio)
+        if self.q_enc == "beats":
+            Z = self.adapt_query(batch.query.audio)
+        elif self.q_enc == "Passt":
+            Z = self.passt(batch.query.audio)
+            Z = self.query_trans(Z)
 
-        
         """
             Ways to Combine Mixture & Query
             1. FiLM Condition + MLP

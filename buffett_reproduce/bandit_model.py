@@ -20,6 +20,7 @@ from models.e2e.bandit.tfmodel import SeqBandModellingModule
 from models.e2e.querier.passt import Passt, PasstWrapper
 from models.e2e.conditioners.film import FiLM
 from models.types import InputType, OperationMode, SimpleishNamespace
+from beats.BEATs import BEATs, BEATsConfig
 
 from unet import UnetIquery
 
@@ -71,6 +72,7 @@ class MyBandSplit(BaseEndToEndModule):
         normalized: bool = True,
         pad_mode: str = "constant",
         onesided: bool = True,
+        use_beats: bool = True, # False
         fs: int = 44100,
     ):
         super().__init__()
@@ -153,6 +155,21 @@ class MyBandSplit(BaseEndToEndModule):
             multiplicative=multiplicative_film,
             depth=film_depth,
         )
+        
+        self.use_beats = use_beats
+        if self.use_beats:
+            self.instantiate_beats(beats_check_point_pth='beats/pt_dict/BEATs_iter3_plus_AS2M.pt')
+
+    def instantiate_beats(
+        self,
+        beats_check_point_pth='beats/pt_dict/BEATs_iter3_plus_AS2M.pt',
+    ):
+        checkpoint = torch.load(beats_check_point_pth)
+
+        cfg = BEATsConfig(checkpoint['cfg'])
+        BEATs_model = BEATs(cfg)
+        BEATs_model.load_state_dict(checkpoint['model'])
+        self.beats = BEATs_model.eval().cuda()
 
 
     def instantiate_bandsplit(
@@ -184,6 +201,20 @@ class MyBandSplit(BaseEndToEndModule):
             treat_channel_as_feature=treat_channel_as_feature,
             emb_dim=emb_dim,
         )
+        
+        
+        
+    def beats_query(self, wav):
+        wav = wav.mean(dim=1, keepdim=False)
+        padding_mask = torch.zeros(1, wav.shape[1]).bool().cuda()  # Move padding mask to GPU
+        embed = []
+
+        for i in range(wav.shape[0]):
+            embed.append(self.beats.extract_features(wav[i].unsqueeze(0), padding_mask=padding_mask)[0].mean(dim=1, keepdim=False))
+
+        embed = torch.cat(embed, dim=0)
+        return embed
+    
     
     
     def instantiate_tf_modelling(
@@ -279,8 +310,13 @@ class MyBandSplit(BaseEndToEndModule):
     
     
     def adapt_query(self, q, batch):
-        
-        w = self.query_encoder(batch.query.audio)
+        if self.use_beats:
+            w = self.beats_query(batch.query.audio)
+        else:
+            w = self.query_encoder(batch.query.audio)
+            
+        # BF: torch.Size([1, 2, 441000]) 
+        # AF: torch.Size([1, 768])
         q = torch.permute(q, (0, 3, 1, 2)) # (batch, n_band, n_time, emb_dim) -> (batch, emb_dim, n_band, n_time)
         q = self.film(q, w)
         q = torch.permute(q, (0, 2, 3, 1)) # -> (batch, n_band, n_time, emb_dim)

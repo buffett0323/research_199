@@ -34,9 +34,10 @@ from data.moisesdb.datamodule import (
 
 
 # Init settings
-wandb_use = True # False
+wandb_use = False # False
 lr = 1e-3 #1e-4
 num_epochs = 200
+batch_size = 2 #4
 config_path = "config/train.yml"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Training on device:", device)
@@ -67,7 +68,7 @@ print("Training with stems: ", stems)
 
 datamodule = MoisesDataModule(
     data_root=config.data.data_root,
-    batch_size=config.data.batch_size,
+    batch_size=batch_size,
     num_workers=config.data.num_workers,
     train_kwargs=config.data.get("train_kwargs", None),
     val_kwargs=config.data.get("val_kwargs", None),

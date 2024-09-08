@@ -53,15 +53,16 @@ Dataset Structure:
 """
 
 # Init settings
-wandb_use = True # False
+wandb_use = False # False
 lr = 1e-3 # 1e-4
 num_epochs = 200
-batch_size = 4
+batch_size = 8
 n_srcs = 2
 emb_dim = 768 # For BEATs
 n_fft = 1022
 fs = 44100
 mix_query_mode = "FiLM"
+q_enc = "Passt"
 config_path = "config/train.yml"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Training on device:", device)
@@ -114,14 +115,14 @@ model = MyModel(
     stride=(1, 1),
     n_masks=n_srcs,
     mix_query_mode=mix_query_mode,
+    q_enc=q_enc,
 ).to(device)
 
 
 # Optimizer & Scheduler setup
 optimizer = optim.Adam(model.parameters(), lr=lr)
 scheduler = StepLR(optimizer, step_size=1, gamma=0.98)
-# criterion = L1SNRDecibelMatchLoss() #
-criterion = L1SNR_Recons_Loss()
+criterion = L1SNRDecibelMatchLoss() # criterion = L1SNR_Recons_Loss()
 
 
 early_stop_counter, early_stop_thres = 0, 4
@@ -142,7 +143,8 @@ for epoch in tqdm(range(num_epochs)):
         batch = model(batch)
 
         # Compute the loss
-        loss = criterion(batch)
+        # loss = criterion(batch)
+        loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
         train_loss += loss.item()
         
         # Backward pass and optimization
@@ -166,7 +168,8 @@ for epoch in tqdm(range(num_epochs)):
                 batch = model(batch)
 
                 # Compute the loss
-                loss = criterion(batch)
+                # loss = criterion(batch)
+                loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
                 val_loss += loss.item()
 
                 # Calculate metrics
