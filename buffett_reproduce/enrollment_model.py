@@ -41,14 +41,13 @@ class MyModel(nn.Module):
         in_channels, 
         embedding_size, 
         out_channels, 
-        fs, 
         kernel_size, 
         stride,
+        fs=44100,
         n_masks=2,
-        n_fft=1022,
-        hop_length=256,
-        win_length=1022,
-        n_sqm_modules=12,
+        n_fft=2048, #1022,
+        hop_length=512, #256,
+        win_length=2048, #1022,
         rnn_dim=256,
         eps=1e-10,
         bidirectional=True,
@@ -70,8 +69,6 @@ class MyModel(nn.Module):
         self.hop_length = hop_length
         self.win_length = win_length
         self.mix_query_mode = mix_query_mode
-        self.F = 512
-        self.T = 256
         self.eps = eps
         self.q_enc = q_enc
         
@@ -103,16 +100,15 @@ class MyModel(nn.Module):
         )
 
         self.film = FiLM(
-            cond_embedding_dim=256, 
-            channels=256, 
+            cond_embedding_dim=512, 
+            channels=512, 
             additive=True, 
             multiplicative=True
         )
         
         self.query_trans = QueryEncoder(
             in_channels=embedding_size,
-            hidden_channels=512,
-            out_channels=256, # 768 -> 256
+            out_channels=512, # 768 -> 512
         )
         
         if q_enc == "beats":
@@ -132,7 +128,7 @@ class MyModel(nn.Module):
         )
         
         self.mlp = MLP(
-            input_dim=self.T * 128, 
+            input_dim=512*36, 
             hidden_dim=512, 
             output_dim=1, #self.n_masks, 
             num_layers=3,
@@ -151,25 +147,28 @@ class MyModel(nn.Module):
         self.beats = BEATs_model.eval().cuda()
 
         
-    def adapt_query(self, wav):
+    def beats_query(self, wav):
         padding_mask = torch.zeros(1, wav.shape[1]).bool().cuda()  # Move padding mask to GPU
         embed = []
         for i in range(wav.shape[0]):
             embed.append(self.beats.extract_features(wav[i].unsqueeze(0), padding_mask=padding_mask)[0].mean(dim=1, keepdim=False))
 
         embed = torch.cat(embed, dim=0)
-        embed = self.query_trans(embed)
         return embed
+    
     
     def mask(self, x, m):
         return x * m
+    
     
     def pre_process(self, batch: InputType):
         """
             Transform from Binaural into Mono
             Both the mixture and the stems
         """
-        batch.mixture.audio = batch.mixture.audio[:, :, :SET_LENGTH].mean(dim=1, keepdim=True)
+        # Transform to mono
+        batch.mixture.audio = batch.mixture.audio.mean(dim=1, keepdim=True)
+        # batch.mixture.audio = batch.mixture.audio[:, :, :SET_LENGTH].mean(dim=1, keepdim=True)
 
         # Compute the STFT spectrogram
         with torch.no_grad():
@@ -177,8 +176,10 @@ class MyModel(nn.Module):
             
             if "sources" in batch.keys():
                 for stem in batch.sources.keys():
-                    batch.sources[stem].audio = batch.sources[stem].audio[:, :, :SET_LENGTH].mean(dim=1, keepdim=True)
-                    # batch.sources[stem].spectrogram = self.stft(batch.sources[stem].audio)
+                    # Transform to mono
+                    batch.sources[stem].audio = batch.sources[stem].audio.mean(dim=1, keepdim=True)
+                    # batch.sources[stem].audio = batch.sources[stem].audio[:, :, :SET_LENGTH].mean(dim=1, keepdim=True)
+                    # batch.sources[stem].spectrogram = self.stft(batch.sources[stem].audio) # Not used
             
             # batch.query.audio = batch.query.audio.mean(dim=1, keepdim=False)
                     
@@ -205,7 +206,8 @@ class MyModel(nn.Module):
 
         # Query encoder
         if self.q_enc == "beats":
-            Z = self.adapt_query(batch.query.audio)
+            Z = self.beats_query(batch.query.audio)
+            Z = self.query_trans(Z)
         elif self.q_enc == "Passt":
             Z = self.passt(batch.query.audio)
             Z = self.query_trans(Z)
@@ -220,7 +222,6 @@ class MyModel(nn.Module):
         x_latent = self.film(x_latent, Z)
         x_latent = x_latent.permute(0, 2, 1, 3) # torch.Size([BS, 64, 256, 32*4])
         x_latent = self.mlp(x_latent) # ([BS=2, C_e=64, N=1]) 2 -> 1
-
         
         # Mask estim
         pred_mask = torch.einsum('bcft,bcn->bnft', x, x_latent) # torch.Size([4, 2->1, 512, 256*4])
@@ -253,20 +254,13 @@ class QueryEncoder(nn.Module):
     def __init__(
         self,
         in_channels=768,
-        hidden_channels=512,
-        out_channels=256,
+        out_channels=512,
         ):
         super(QueryEncoder, self).__init__()
         
         # First fully connected layer to reduce the dimension
-        self.fc1 = nn.Sequential(
-            nn.Conv1d(in_channels=in_channels, out_channels=hidden_channels, kernel_size=1),
-            nn.ReLU()
-        )
-        
-        # Second fully connected layer to further reduce the dimension
-        self.fc2 = nn.Sequential(
-            nn.Conv1d(in_channels=hidden_channels, out_channels=out_channels, kernel_size=1),
+        self.fc = nn.Sequential(
+            nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=1),
             nn.ReLU()
         )
 
@@ -274,8 +268,7 @@ class QueryEncoder(nn.Module):
         # Input shape is (batch_size, 768) --> (batch_size, 768, 1)
         x = x.unsqueeze(-1)
         
-        x = self.fc1(x)  # Shape will become (batch_size, 512, 1)
-        x = self.fc2(x)  # Shape will become (batch_size, 256, 1)
+        x = self.fc(x)  # Shape will become (batch_size, 512, 1)
         x = x.squeeze(-1)  # Final shape will be (batch_size, 256)
         
         return x

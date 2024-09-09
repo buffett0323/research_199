@@ -15,7 +15,7 @@ class UnetIquery(nn.Module):
         self.downrelu7 = nn.LeakyReLU(0.2, True)
 
         self.uprelu7 = nn.ReLU(True)
-        self.upsample7 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.upsample7 = nn.Upsample(size=(16, 9), mode='bilinear', align_corners=True) # nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.uprelu6 = nn.ReLU(True)
         self.upsample6 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.uprelu5 = nn.ReLU(True)
@@ -27,7 +27,7 @@ class UnetIquery(nn.Module):
         self.uprelu2 = nn.ReLU(True)
         self.upsample2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.uprelu1 = nn.ReLU(True)
-        self.upsample1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+        self.upsample1 = nn.Upsample(size=(1025, 576), mode='bilinear', align_corners=True) # nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.use_bias = False
 
         self.downconv1 = nn.Conv2d(1, ngf, kernel_size=4, stride=2, padding=1, bias=self.use_bias)
@@ -110,13 +110,15 @@ class UnetIquery(nn.Module):
         x = self.upsample5(x)
         x = self.upconv5(x)
         x = self.upnorm5(x)
+        x_latent = x
+        
         
         #layer 4 up:
         x = self.uprelu4(torch.cat([x4, x], 1))
         x = self.upsample4(x)
         x = self.upconv4(x)
         x = self.upnorm4(x)
-        x_latent = x 
+        # x_latent = x 
 
 
         #layer3 up:
