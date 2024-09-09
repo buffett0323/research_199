@@ -58,6 +58,44 @@ def MoisesDataModule(
 
     return datamodule
 
+
+# Self added
+def get_datasets(
+    data_root: str,
+    batch_size: int,
+    num_workers: int = 8,
+    train_kwargs: Optional[Mapping] = None,
+    val_kwargs: Optional[Mapping] = None,
+    test_kwargs: Optional[Mapping] = None,
+    datamodule_kwargs: Optional[Mapping] = None,
+) -> pl.LightningDataModule:
+    if train_kwargs is None:
+        train_kwargs = {}
+
+    if val_kwargs is None:
+        val_kwargs = {}
+
+    if test_kwargs is None:
+        test_kwargs = {}
+
+    if datamodule_kwargs is None:
+        datamodule_kwargs = {}
+
+    train_dataset = MoisesDBRandomChunkRandomQueryDataset(
+        data_root=data_root, split="train", **train_kwargs
+    )
+
+    val_dataset = MoisesDBDeterministicChunkDeterministicQueryDataset(
+        data_root=data_root, split="val", **val_kwargs
+    )
+
+    test_dataset = MoisesDBDeterministicChunkDeterministicQueryDataset(
+        data_root=data_root, split="test", **test_kwargs
+    )
+
+    return train_dataset, val_dataset, test_dataset
+
+
 def MoisesBalancedTrainDataModule(
     data_root: str,
     batch_size: int,
