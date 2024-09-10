@@ -100,16 +100,17 @@ class MyModel(nn.Module):
         )
 
         self.film = FiLM(
-            cond_embedding_dim=512, 
-            channels=512, 
+            cond_embedding_dim=embedding_size, #256,
+            channels=512, #128, 
             additive=True, 
             multiplicative=True
         )
         
-        self.query_trans = QueryEncoder(
-            in_channels=embedding_size,
-            out_channels=512, # 768 -> 512
-        )
+        # self.query_trans = QueryEncoder( # Not used
+        #     in_channels=embedding_size,
+        #     hidden_channels=512,
+        #     out_channels=512, #512, # 768 -> 256
+        # )
         
         if q_enc == "beats":
             self.instantiate_beats(beats_check_point_pth='beats/pt_dict/BEATs_iter3_plus_AS2M.pt')
@@ -128,7 +129,7 @@ class MyModel(nn.Module):
         )
         
         self.mlp = MLP(
-            input_dim=512*36, 
+            input_dim=512*36, # 256 * 128
             hidden_dim=512, 
             output_dim=1, #self.n_masks, 
             num_layers=3,
@@ -207,10 +208,8 @@ class MyModel(nn.Module):
         # Query encoder
         if self.q_enc == "beats":
             Z = self.beats_query(batch.query.audio)
-            Z = self.query_trans(Z)
         elif self.q_enc == "Passt":
             Z = self.passt(batch.query.audio)
-            Z = self.query_trans(Z)
 
         """
             Ways to Combine Mixture & Query
@@ -229,7 +228,8 @@ class MyModel(nn.Module):
         gt_mask = self.stft(batch.sources["target"].audio) / (batch.mixture.spectrogram+ self.eps)
         
         batch.masks = SimpleishNamespace(
-            pred=pred_mask, ground_truth=gt_mask
+            pred=pred_mask, 
+            ground_truth=gt_mask,
         )
         
         # Write the predicted results back to batch data
@@ -250,28 +250,37 @@ class MyModel(nn.Module):
 
 
 
-class QueryEncoder(nn.Module):
-    def __init__(
-        self,
-        in_channels=768,
-        out_channels=512,
-        ):
-        super(QueryEncoder, self).__init__()
+# class QueryEncoder(nn.Module):
+#     def __init__(
+#         self,
+#         in_channels=768,
+#         hidden_channels=512,
+#         out_channels=256,
+#     ):
+#         super(QueryEncoder, self).__init__()
         
-        # First fully connected layer to reduce the dimension
-        self.fc = nn.Sequential(
-            nn.Conv1d(in_channels=in_channels, out_channels=out_channels, kernel_size=1),
-            nn.ReLU()
-        )
+#         # First fully connected layer to reduce the dimension
+#         self.fc1 = nn.Sequential(
+#             nn.Conv1d(in_channels=in_channels, out_channels=hidden_channels, kernel_size=1),
+#             nn.ReLU()
+#         )
 
-    def forward(self, x):
-        # Input shape is (batch_size, 768) --> (batch_size, 768, 1)
-        x = x.unsqueeze(-1)
+#         # Second fully connected layer to further reduce the dimension
+#         self.fc2 = nn.Sequential(
+#             nn.Conv1d(in_channels=hidden_channels, out_channels=out_channels, kernel_size=1),
+#             nn.ReLU()
+#         )
+
+#     def forward(self, x):
+#         # Input shape is (batch_size, 768) --> (batch_size, 768, 1)
+#         x = x.unsqueeze(-1)
         
-        x = self.fc(x)  # Shape will become (batch_size, 512, 1)
-        x = x.squeeze(-1)  # Final shape will be (batch_size, 256)
+#         x = self.fc1(x)  # Shape will become (batch_size, 512, 1)
+#         x = self.fc2(x)  # Shape will become (batch_size, 256, 1)
         
-        return x
+#         x = x.squeeze(-1)  # Final shape will be (batch_size, 256)
+        
+#         return x
 
 
 

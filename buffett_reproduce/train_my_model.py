@@ -176,7 +176,7 @@ for epoch in tqdm(range(num_epochs)):
 
         
         
-        print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {train_loss}, Val Loss: {val_loss}, Val SNR: {val_snr}")
+        print(f"Epoch {epoch}/{num_epochs}, Train Loss: {train_loss}, Val Loss: {val_loss}, Val SNR: {val_snr}")
         if wandb_use:
             wandb.log({"val_loss": val_loss})
             wandb.log(val_snr)

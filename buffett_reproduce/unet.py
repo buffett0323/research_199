@@ -110,7 +110,7 @@ class UnetIquery(nn.Module):
         x = self.upsample5(x)
         x = self.upconv5(x)
         x = self.upnorm5(x)
-        x_latent = x
+        x_latent = x # revised place
         
         
         #layer 4 up:
@@ -118,7 +118,7 @@ class UnetIquery(nn.Module):
         x = self.upsample4(x)
         x = self.upconv4(x)
         x = self.upnorm4(x)
-        # x_latent = x 
+        # x_latent = x # original
 
 
         #layer3 up:
