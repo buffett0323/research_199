@@ -30,7 +30,7 @@ def from_datasets(
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
-            pin_memory=True,
+            pin_memory=False, #pin_memory=True,
             prefetch_factor=4,
             persistent_workers=True,
         )

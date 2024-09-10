@@ -19,7 +19,7 @@ from models.e2e.base import BaseEndToEndModule
 from models.types import InputType, OperationMode, SimpleishNamespace
 from beats.BEATs import BEATs, BEATsConfig
 
-from unet import UnetIquery
+from unet import UnetIquery, UnetTranspose2D
 from film import FiLM
 
 
@@ -37,33 +37,20 @@ SET_LENGTH = 261888
 class MyModel(nn.Module):
     def __init__(
         self,
-        batch_size,
-        in_channels, 
-        embedding_size, 
-        out_channels, 
-        kernel_size, 
-        stride,
+        embedding_size=768,
         fs=44100,
         n_masks=2,
         n_fft=2048, #1022,
         hop_length=512, #256,
         win_length=2048, #1022,
-        rnn_dim=256,
         eps=1e-10,
-        bidirectional=True,
-        rnn_type="LSTM",
         mix_query_mode="FiLM",
         q_enc="Passt",
     ):
         super(MyModel, self).__init__()
         
-        self.batch_size = batch_size
-        self.in_channels = in_channels
         self.embedding_size = embedding_size
-        self.out_channels = out_channels
         self.fs = fs
-        self.kernel_size = kernel_size
-        self.stride = stride
         self.n_masks = n_masks
         self.n_fft = n_fft
         self.hop_length = hop_length
@@ -121,7 +108,7 @@ class MyModel(nn.Module):
                 passt_fs=32000,
             )
             
-        self.unet = UnetIquery(
+        self.unet = UnetTranspose2D( # UnetIquery(
             fc_dim=64, 
             num_downs=5, 
             ngf=64, 
@@ -302,10 +289,10 @@ class MLP(nn.Module):
         )
 
     def forward(self, x):
-        batch_size, C_e, T, W = x.shape  # [Batch_size, C_e, T, W]
+        BS, C_e, T, W = x.shape  # [Batch_size, C_e, T, W]
         
         # Use reshape instead of view to flatten the spatial dimensions (T and W)
-        x = x.reshape(batch_size, C_e, -1)  # New shape: [Batch_size, C_e, T * W]
+        x = x.reshape(BS, C_e, -1)  # New shape: [Batch_size, C_e, T * W]
         
         for i, layer in enumerate(self.layers):
             x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)

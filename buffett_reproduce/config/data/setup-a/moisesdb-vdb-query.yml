@@ -42,6 +42,21 @@ val_kwargs:
     ]
   query_file: "query-10s"
 test_kwargs:
+  chunk_size_seconds: 6.0
+  hop_size_seconds: 6.0
+  query_size_seconds: 10.0
   npy_memmap: true
+  mixture_stem: mixture
+  use_own_query: false
+  allowed_stems: 
+    [
+      "bass",
+      "drums",
+      "lead_male_singer",
+      "lead_female_singer",
+      # "distorted_electric_guitar",
+      # "clean_electric_guitar",
+      # "acoustic_guitar",
+    ]
   query_file: "query-10s" # Added
 n_channels: 2

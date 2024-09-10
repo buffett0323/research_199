@@ -53,10 +53,10 @@ Dataset Structure:
 """
 
 # Init settings
-wandb_use = True # False
+wandb_use = False # False
 lr = 1e-3 # 1e-4
 num_epochs = 500
-batch_size = 32 #8
+batch_size = 8 #8
 n_srcs = 2
 emb_dim = 768 # For BEATs
 mix_query_mode = "FiLM"
@@ -77,12 +77,11 @@ if wandb_use:
     wandb.init(
         project="Query_ss",
         config={
-            "learning_rate": lr,
-            "architecture": "FiLM_UNet Using Other's dataset",
-            "dataset": "MoisesDB",
-            "epochs": num_epochs,
-        },
-        notes="New UNET",
+        "learning_rate": lr,
+        "architecture": "FiLM_UNet Using Other's dataset",
+        "dataset": "MoisesDB",
+        "epochs": num_epochs,
+        }
     )
 
 
@@ -117,80 +116,85 @@ scheduler = StepLR(optimizer, step_size=1, gamma=0.98)
 criterion = L1SNRDecibelMatchLoss() # criterion = L1SNR_Recons_Loss()
 
 
+
 early_stop_counter, early_stop_thres = 0, 4
 min_val_loss = 1e10
 
-# Training loop
-for epoch in tqdm(range(num_epochs)):
+
+# # Training loop
+# for epoch in tqdm(range(num_epochs)):
     
-    model.train()
-    train_loss = 0.0
-    for batch in tqdm(datamodule.train_dataloader()):
-        batch = InputType.from_dict(batch)
-        batch = to_device(batch)
+#     model.train()
+#     train_loss = 0.0
+#     for batch in tqdm(datamodule.train_dataloader()):
+#         batch = InputType.from_dict(batch)
+#         batch = to_device(batch)
         
-        optimizer.zero_grad()
+#         optimizer.zero_grad()
         
-        # Forward pass
-        batch = model(batch)
+#         # Forward pass
+#         batch = model(batch)
 
-        # Compute the loss
-        # loss = criterion(batch)
-        loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
-        train_loss += loss.item()
+#         # Compute the loss
+#         # loss = criterion(batch)
+#         loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+#         train_loss += loss.item()
         
-        # Backward pass and optimization
-        loss.backward()
-        optimizer.step()
+#         # Backward pass and optimization
+#         loss.backward()
+#         optimizer.step()
+#         break
     
-    scheduler.step()
+#     scheduler.step()
 
 
-    # Validation step
-    if epoch % 5 == 0:
-        model.eval()
-        val_loss = 0.0
-        val_metric_handler = MetricHandler(stems)
-        with torch.no_grad():
-            for batch in tqdm(datamodule.val_dataloader()):
-                batch = InputType.from_dict(batch)
-                batch = to_device(batch)
+#     # Validation step
+#     if epoch % 5 == 0:
+#         model.eval()
+#         val_loss = 0.0
+#         val_metric_handler = MetricHandler(stems)
+#         with torch.no_grad():
+#             for batch in tqdm(datamodule.val_dataloader()):
+#                 batch = InputType.from_dict(batch)
+#                 batch = to_device(batch)
                 
-                # Forward pass
-                batch = model(batch)
+#                 # Forward pass
+#                 batch = model(batch)
 
-                # Compute the loss
-                # loss = criterion(batch)
-                loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
-                val_loss += loss.item()
+#                 # Compute the loss
+#                 # loss = criterion(batch)
+#                 loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+#                 val_loss += loss.item()
 
-                # Calculate metrics
-                val_metric_handler.calculate_snr(batch.estimates["target"].audio, batch.sources["target"].audio, batch.metadata.stem)
-
-            # Record the validation SNR
-            val_snr = val_metric_handler.get_mean_median()
+#                 # Calculate metrics
+#                 val_metric_handler.calculate_snr(batch.estimates["target"].audio, batch.sources["target"].audio, batch.metadata.stem)
+#                 break
+            
+#             # Record the validation SNR
+#             val_snr = val_metric_handler.get_mean_median()
 
         
         
-        print(f"Epoch {epoch}/{num_epochs}, Train Loss: {train_loss}, Val Loss: {val_loss}, Val SNR: {val_snr}")
-        if wandb_use:
-            wandb.log({"val_loss": val_loss})
-            wandb.log(val_snr)
-            # wandb.log({"val_sdr": sdr, "val_sir": sir, "val_sar": sar})
+#         print(f"Epoch {epoch}/{num_epochs}, Train Loss: {train_loss}, Val Loss: {val_loss}, Val SNR: {val_snr}")
+#         if wandb_use:
+#             wandb.log({"val_loss": val_loss})
+#             wandb.log(val_snr)
+#             # wandb.log({"val_sdr": sdr, "val_sir": sir, "val_sar": sar})
             
-        # Early stop
-        if val_loss < min_val_loss:
-            min_val_loss = val_loss
-            early_stop_counter = 0
-        else:
-            early_stop_counter += 1
-            if early_stop_counter >= early_stop_thres:
-                break
+#         # Early stop
+#         if val_loss < min_val_loss:
+#             min_val_loss = val_loss
+#             early_stop_counter = 0
+#         else:
+#             early_stop_counter += 1
+#             if early_stop_counter >= early_stop_thres:
+#                 break
             
-    else:
-        if wandb_use:
-            wandb.log({"train_loss": train_loss})
+#     else:
+#         if wandb_use:
+#             wandb.log({"train_loss": train_loss})
 
+    
     
     
 # Test step after all epochs
@@ -215,15 +219,12 @@ with torch.no_grad():
         # Calculate metrics
         test_metric_handler.calculate_snr(batch.estimates["target"].audio, batch.sources["target"].audio, batch.metadata.stem)
 
+    
     # Get the final result of test SNR
     test_snr = test_metric_handler.get_mean_median()
     print("Test snr:", test_snr)
         
-        
+
 print(f"Final Test Loss: {test_loss}")
-if wandb_use:
-    wandb.log({"test_loss": test_loss})
-    wandb.log(test_snr)
-    
 
 if wandb_use: wandb.finish()
