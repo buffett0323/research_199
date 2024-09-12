@@ -39,7 +39,7 @@ class MyModel(nn.Module):
         self,
         embedding_size=768,
         fs=44100,
-        n_masks=2,
+        n_masks=1, #2,
         n_fft=2048, #1022,
         hop_length=512, #256,
         win_length=2048, #1022,
@@ -93,12 +93,7 @@ class MyModel(nn.Module):
             multiplicative=True
         )
         
-        # self.query_trans = QueryEncoder( # Not used
-        #     in_channels=embedding_size,
-        #     hidden_channels=512,
-        #     out_channels=512, #512, # 768 -> 256
-        # )
-        
+
         if q_enc == "beats":
             self.instantiate_beats(beats_check_point_pth='beats/pt_dict/BEATs_iter3_plus_AS2M.pt')
             
@@ -118,7 +113,7 @@ class MyModel(nn.Module):
         self.mlp = MLP(
             input_dim=512*36, # 256 * 128
             hidden_dim=512, 
-            output_dim=1, #self.n_masks, 
+            output_dim=self.n_masks, 
             num_layers=3,
         )
 
@@ -207,12 +202,14 @@ class MyModel(nn.Module):
         # First Way: FiLM Condition + MLP
         x_latent = self.film(x_latent, Z)
         x_latent = x_latent.permute(0, 2, 1, 3) # torch.Size([BS, 64, 256, 32*4])
-        x_latent = self.mlp(x_latent) # ([BS=2, C_e=64, N=1]) 2 -> 1
+        x_latent = self.mlp(x_latent) # ([BS=2, C_e=64, N=2->1])
         
         # Mask estim
         pred_mask = torch.einsum('bcft,bcn->bnft', x, x_latent) # torch.Size([4, 2->1, 512, 256*4])
         target = self.mask(batch.mixture.spectrogram, pred_mask)
-        gt_mask = self.stft(batch.sources["target"].audio) / (batch.mixture.spectrogram+ self.eps)
+        # target = self.mask(batch.mixture.spectrogram, pred_mask[:,0,:,:]) 
+        # non_target = self.mask(batch.mixture.spectrogram, pred_mask[:,1,:,:])
+        gt_mask = self.stft(batch.sources["target"].audio) / (batch.mixture.spectrogram + self.eps)
         
         batch.masks = SimpleishNamespace(
             pred=pred_mask, 
@@ -225,49 +222,16 @@ class MyModel(nn.Module):
         )
 
         # batch.estimates["target"] = SimpleishNamespace(
-        #     audio=self.istft(s[:,0,:,:]) #, spectrogram=s[:,0,:,:]
+        #     audio=self.istft(target) #, spectrogram=target[:,0,:,:]
         # )
         # batch.estimates["non-target"] = SimpleishNamespace(
-        #     audio=self.istft(s[:,1,:,:]) #, spectrogram=s[:,1,:,:]
+        #     audio=self.istft(non_target) #, spectrogram=non_target[:,1,:,:]
         # )
     
         return batch
 
 
 
-
-
-# class QueryEncoder(nn.Module):
-#     def __init__(
-#         self,
-#         in_channels=768,
-#         hidden_channels=512,
-#         out_channels=256,
-#     ):
-#         super(QueryEncoder, self).__init__()
-        
-#         # First fully connected layer to reduce the dimension
-#         self.fc1 = nn.Sequential(
-#             nn.Conv1d(in_channels=in_channels, out_channels=hidden_channels, kernel_size=1),
-#             nn.ReLU()
-#         )
-
-#         # Second fully connected layer to further reduce the dimension
-#         self.fc2 = nn.Sequential(
-#             nn.Conv1d(in_channels=hidden_channels, out_channels=out_channels, kernel_size=1),
-#             nn.ReLU()
-#         )
-
-#     def forward(self, x):
-#         # Input shape is (batch_size, 768) --> (batch_size, 768, 1)
-#         x = x.unsqueeze(-1)
-        
-#         x = self.fc1(x)  # Shape will become (batch_size, 512, 1)
-#         x = self.fc2(x)  # Shape will become (batch_size, 256, 1)
-        
-#         x = x.squeeze(-1)  # Final shape will be (batch_size, 256)
-        
-#         return x
 
 
 

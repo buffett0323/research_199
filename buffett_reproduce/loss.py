@@ -119,35 +119,26 @@ class L1SNR_Recons_Loss(_Loss):
     """ Adding Reconstruction Loss """
     def __init__(
         self, 
-        db_weight=0.1, 
         l1snr_eps=1e-3, 
         dbeps=1e-3,
-        recons_eps=1e-3,
-        n_fft=1022,
-        hop_length=256,
     ):
         super().__init__()
         self.l1snr = L1SNRLoss(l1snr_eps)
         self.l1loss = nn.L1Loss()
         self.decibel_match = DecibelMatchLoss(dbeps)
-        self.n_fft = n_fft
-        self.hop_length = hop_length
+ 
         
     def forward(self, batch):
-        # pred_masks, gt_masks, gt_stft, S_k):
         
         # 1. Calculate L1 Loss for Mask prediction
         loss_masks = self.l1loss(batch.masks.pred, batch.masks.ground_truth)
         
-        
         # 2. Calculate the L1SNR Loss of Separated query track
         loss_l1snr = self.l1snr(batch.estimates["target"].audio, batch.sources["target"].audio)
-        
         
         # 3. Calculate the L1SNR Loss of Reconstruction Loss
         loss_dem = self.decibel_match(batch.estimates["target"].audio, batch.sources["target"].audio)
         
-        # print(loss_masks.item(), loss_l1snr.item(), loss_sep.item())
         return loss_masks + loss_l1snr + loss_dem
 
 
