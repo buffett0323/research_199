@@ -1,6 +1,7 @@
 # Buffett added
 buffett_reproduce/wandb/
 buffett_reproduce/beats/pt_dict/
+buffett_reproduce/mamba/
 notebooks/beats/pt_dict/
 
 # Byte-compiled / optimized / DLL files
