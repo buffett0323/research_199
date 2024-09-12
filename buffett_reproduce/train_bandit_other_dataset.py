@@ -34,9 +34,9 @@ from data.moisesdb.datamodule import (
 
 
 # Init settings
-wandb_use = False # False
+wandb_use = True # False
 lr = 1e-3 #1e-4
-num_epochs = 200
+num_epochs = 500
 batch_size = 2 #4
 config_path = "config/train.yml"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -59,7 +59,8 @@ if wandb_use:
         "architecture": "Self-Bandquet Using Other's dataset",
         "dataset": "MoisesDB",
         "epochs": num_epochs,
-        }
+        },
+        notes="Bandit model",
     )
 
 config = _load_config(config_path)
@@ -178,54 +179,38 @@ for epoch in tqdm(range(num_epochs)):
             wandb.log({"train_loss": train_loss})
 
     
+  
+# Test step after all epochs
+model.eval()
+test_loss = 0.0
+test_metric_handler = MetricHandler(stems)
+
+
+with torch.no_grad():
+    for batch in tqdm(datamodule.test_dataloader()):
+        batch = InputType.from_dict(batch)
+        batch = to_device(batch)
     
-    
-# # Test step after all epochs
-# model.eval()
-# test_loss = 0.0
-# test_metric_handler = MetricHandler(stems)
+        # Forward pass
+        batch = model(batch)
 
-# with torch.no_grad():
-#     for mixture, query_emb, target, stem in test_loader:
-#         mixture = mixture.to(device)
-#         query_emb = query_emb.mean(axis=1).to(device)
-#         target = target.to(device)
+        # Compute the loss
+        # loss = criterion(batch)
+        loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+        test_loss += loss.item()
 
-#         batch = InputType(
-#             mixture= SimpleishNamespace(
-#                 audio=mixture, spectrogram=None
-#             ),
-#             sources={
-#                 f"{stem}": SimpleishNamespace(
-#                     audio=target, spectrogram=None
-#                 ),
-#             },
-#             query=SimpleishNamespace(
-#                 audio=target, spectrogram=None
-#             ),
-#             estimates={
-#                 "target": SimpleishNamespace(
-#                     audio=mixture, spectrogram=None
-#                 ),
-#             },
-#             # metadata={"sample_rate": fs}
-#         )
+        # Calculate metrics
+        test_metric_handler.calculate_snr(batch.estimates["target"].audio, batch.sources["target"].audio, batch.metadata.stem)
 
-#         # Forward pass
-#         batch = model(batch)
-
-#         # Compute the loss
-#         loss = criterion(batch.estimates["target"].audio, batch.sources[f"{stem}"].audio) # Y_Pred, Y_True
-#         test_loss += loss.item()
-
-#         # Calculate metrics
-#         test_metric_handler.calculate_snr(batch.estimates["target"].audio, batch.sources[f"{stem}"].audio, stem)
-    
-#     # Get the final result of test SNR
-#     test_snr = test_metric_handler.get_mean_median()
-#     print("Test snr:", test_snr)
+    # Get the final result of test SNR
+    test_snr = test_metric_handler.get_mean_median()
+    print("Test snr:", test_snr)
         
+        
+print(f"Final Test Loss: {test_loss}")
+if wandb_use:
+    wandb.log({"test_loss": test_loss})
+    wandb.log(test_snr)
+    
 
-# print(f"Final Test Loss: {test_loss}")
-
-# if wandb_use: wandb.finish()
+if wandb_use: wandb.finish()
