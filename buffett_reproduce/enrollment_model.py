@@ -105,7 +105,7 @@ class MyModel(nn.Module):
             
         self.unet = UnetTranspose2D( # UnetIquery(
             fc_dim=64, 
-            num_downs=5, 
+            num_downs=7, 
             ngf=64, 
             use_dropout=False,
         )
@@ -185,7 +185,7 @@ class MyModel(nn.Module):
         # Separate mixture spec -> unet
         x = batch.mixture.spectrogram
         x = torch.abs(x)
-        x, x_latent = self.unet(x)
+        x, x_latent = self.unet(x) # BF: torch.Size([BS, 1, 1025, 576])
 
         # Query encoder
         if self.q_enc == "beats":
@@ -200,7 +200,7 @@ class MyModel(nn.Module):
         """
         
         # First Way: FiLM Condition + MLP
-        x_latent = self.film(x_latent, Z)
+        x_latent = self.film(x_latent, Z) # BF: torch.Size([8, 512, 64, 36]) torch.Size([8, 768]) -> torch.Size([8, 512, 64, 36])
         x_latent = x_latent.permute(0, 2, 1, 3) # torch.Size([BS, 64, 256, 32*4])
         x_latent = self.mlp(x_latent) # ([BS=2, C_e=64, N=2->1])
         

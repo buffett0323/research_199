@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import numpy as np
 
 class UnetIquery(nn.Module):
-    def __init__(self, fc_dim=64, num_downs=5, ngf=64, use_dropout=False):
+    def __init__(self, fc_dim=64, num_downs=7, ngf=64, use_dropout=False):
         super(UnetIquery, self).__init__()
         self.bn0 = nn.BatchNorm2d(1)
         self.downrelu2 = nn.LeakyReLU(0.2, True)
@@ -146,7 +146,7 @@ class UnetIquery(nn.Module):
 
 
 class UnetTranspose2D(nn.Module):
-    def __init__(self, fc_dim=64, num_downs=5, ngf=64, use_dropout=False):
+    def __init__(self, fc_dim=64, num_downs=7, ngf=64, use_dropout=False):
         super(UnetTranspose2D, self).__init__()
         self.bn0 = nn.BatchNorm2d(1)
         self.downrelu2 = nn.LeakyReLU(0.2, True)
