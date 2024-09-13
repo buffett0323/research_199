@@ -53,118 +53,121 @@ Dataset Structure:
 """
 
 
-import torch
-from mamba_ssm import Mamba, Mamba2
+# import torch
+# from mamba_ssm import Mamba, Mamba2
 
-batch, length, dim = 2, 64, 16
-x = torch.randn(batch, length, dim).to("cuda")
-model = Mamba(
-    # This module uses roughly 3 * expand * d_model^2 parameters
-    d_model=dim, # Model dimension d_model
-    d_state=16,  # SSM state expansion factor
-    d_conv=4,    # Local convolution width
-    expand=2,    # Block expansion factor
-).to("cuda")
-y = model(x)
-assert y.shape == x.shape
-
-
-print(y.shape, x.shape)
-print(y, x)
-# # Init settings
-# wandb_use = False # False
-# lr = 1e-3 # 1e-4
-# num_epochs = 500
-# batch_size = 8 #8
-# n_srcs = 2
-# emb_dim = 768 # For BEATs
-# mix_query_mode = "FiLM"
-# q_enc = "Passt"
-# config_path = "config/train.yml"
-# device = torch.device('cpu') # torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-# print("Training on device:", device)
+# batch, length, dim = 2, 64, 16
+# x = torch.randn(batch, length, dim).to("cuda")
+# model = Mamba(
+#     # This module uses roughly 3 * expand * d_model^2 parameters
+#     d_model=dim, # Model dimension d_model
+#     d_state=16,  # SSM state expansion factor
+#     d_conv=4,    # Local convolution width
+#     expand=2,    # Block expansion factor
+# ).to("cuda")
+# y = model(x)
+# assert y.shape == x.shape
 
 
-# def to_device(batch, device=device):
-#     batch.mixture.audio = batch.mixture.audio.to(device) # torch.Size([BS, 2, 294400])
-#     batch.sources.target.audio = batch.sources.target.audio.to(device) # torch.Size([BS, 2, 294400])
-#     batch.query.audio = batch.query.audio.to(device) # torch.Size([BS, 2, 441000])
-#     return batch
-
-
-# if wandb_use:
-#     wandb.init(
-#         project="Query_ss",
-#         config={
-#         "learning_rate": lr,
-#         "architecture": "FiLM_UNet Using Other's dataset",
-#         "dataset": "MoisesDB",
-#         "epochs": num_epochs,
-#         }
-#     )
-
-
-# config = _load_config(config_path)
-# stems = config.data.train_kwargs.allowed_stems
-# print("Training with stems: ", stems)
-
-# datamodule = MoisesDataModule(
-#     data_root=config.data.data_root,
-#     batch_size=batch_size, #config.data.batch_size,
-#     num_workers=config.data.num_workers,
-#     train_kwargs=config.data.get("train_kwargs", None),
-#     val_kwargs=config.data.get("val_kwargs", None),
-#     test_kwargs=config.data.get("test_kwargs", None), # Cannot use now
-#     datamodule_kwargs=config.data.get("datamodule_kwargs", None),
-# )
+# print(y.shape, x.shape)
+# print(y, x)
 
 
 
-# # Instantiate the enrollment model
-# model = MyModel(
-#     embedding_size=emb_dim, 
-#     n_masks=n_srcs,
-#     mix_query_mode=mix_query_mode,
-#     q_enc=q_enc,
-# ).to(device)
+# Init settings
+wandb_use = False # False
+lr = 1e-3 # 1e-4
+num_epochs = 1
+batch_size = 16 #8
+n_srcs = 1
+emb_dim = 768 # For BEATs
+mix_query_mode = "Transformer"#"FiLM"
+q_enc = "Passt"
+config_path = "config/train.yml"
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print("Training on device:", device)
 
 
-# # Optimizer & Scheduler setup
-# optimizer = optim.Adam(model.parameters(), lr=lr)
-# scheduler = StepLR(optimizer, step_size=1, gamma=0.98)
-# criterion = L1SNRDecibelMatchLoss() # criterion = L1SNR_Recons_Loss()
+def to_device(batch, device=device):
+    batch.mixture.audio = batch.mixture.audio.to(device) # torch.Size([BS, 2, 294400])
+    batch.sources.target.audio = batch.sources.target.audio.to(device) # torch.Size([BS, 2, 294400])
+    batch.query.audio = batch.query.audio.to(device) # torch.Size([BS, 2, 441000])
+    return batch
+
+
+if wandb_use:
+    wandb.init(
+        project="Query_ss",
+        config={
+        "learning_rate": lr,
+        "architecture": "FiLM_UNet Using Other's dataset",
+        "dataset": "MoisesDB",
+        "epochs": num_epochs,
+        }
+    )
+
+
+config = _load_config(config_path)
+stems = config.data.train_kwargs.allowed_stems
+print("Training with stems: ", stems)
+
+datamodule = MoisesDataModule(
+    data_root=config.data.data_root,
+    batch_size=batch_size, #config.data.batch_size,
+    num_workers=config.data.num_workers,
+    train_kwargs=config.data.get("train_kwargs", None),
+    val_kwargs=config.data.get("val_kwargs", None),
+    test_kwargs=config.data.get("test_kwargs", None), # Cannot use now
+    datamodule_kwargs=config.data.get("datamodule_kwargs", None),
+)
 
 
 
-# early_stop_counter, early_stop_thres = 0, 4
-# min_val_loss = 1e10
+# Instantiate the enrollment model
+model = MyModel(
+    embedding_size=emb_dim, 
+    n_masks=n_srcs,
+    mix_query_mode=mix_query_mode,
+    q_enc=q_enc,
+).to(device)
 
 
-# # Training loop
-# for epoch in tqdm(range(num_epochs)):
+# Optimizer & Scheduler setup
+optimizer = optim.Adam(model.parameters(), lr=lr)
+scheduler = StepLR(optimizer, step_size=1, gamma=0.98)
+criterion = L1SNRDecibelMatchLoss() # criterion = L1SNR_Recons_Loss()
+
+
+
+early_stop_counter, early_stop_thres = 0, 4
+min_val_loss = 1e10
+
+
+# Training loop
+for epoch in tqdm(range(num_epochs)):
     
-#     model.train()
-#     train_loss = 0.0
-#     for batch in tqdm(datamodule.train_dataloader()):
-#         batch = InputType.from_dict(batch)
-#         batch = to_device(batch)
+    model.train()
+    train_loss = 0.0
+    for batch in tqdm(datamodule.train_dataloader()):
+        batch = InputType.from_dict(batch)
+        batch = to_device(batch)
         
-#         optimizer.zero_grad()
+        optimizer.zero_grad()
         
-#         # Forward pass
-#         batch = model(batch)
+        # Forward pass
+        batch = model(batch)
 
-#         # Compute the loss
-#         # loss = criterion(batch)
-#         loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
-#         train_loss += loss.item()
+        # Compute the loss
+        # loss = criterion(batch)
+        loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+        train_loss += loss.item()
         
-#         # Backward pass and optimization
-#         loss.backward()
-#         optimizer.step()
-#         break
+        # Backward pass and optimization
+        loss.backward()
+        optimizer.step()
+
     
-#     scheduler.step()
+    scheduler.step()
 
 
 #     # Validation step

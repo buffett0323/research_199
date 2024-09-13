@@ -21,6 +21,7 @@ from beats.BEATs import BEATs, BEATsConfig
 
 from unet import UnetIquery, UnetTranspose2D
 from film import FiLM
+from transformer import TransformerPredictor
 
 
 if hasattr(torch, "bfloat16"):
@@ -38,6 +39,7 @@ class MyModel(nn.Module):
     def __init__(
         self,
         embedding_size=768,
+        query_size=512,
         fs=44100,
         n_masks=1, #2,
         n_fft=2048, #1022,
@@ -50,6 +52,7 @@ class MyModel(nn.Module):
         super(MyModel, self).__init__()
         
         self.embedding_size = embedding_size
+        self.query_size = query_size
         self.fs = fs
         self.n_masks = n_masks
         self.n_fft = n_fft
@@ -88,7 +91,7 @@ class MyModel(nn.Module):
 
         self.film = FiLM(
             cond_embedding_dim=embedding_size, #256,
-            channels=512, #128, 
+            channels=query_size, #128, 
             additive=True, 
             multiplicative=True
         )
@@ -112,9 +115,24 @@ class MyModel(nn.Module):
         
         self.mlp = MLP(
             input_dim=512*36, # 256 * 128
-            hidden_dim=512, 
+            hidden_dim=query_size, 
             output_dim=self.n_masks, 
             num_layers=3,
+        )
+        
+        self.net_maskformer = TransformerPredictor(
+            in_channels=query_size, #256, #args.in_channels,
+            hidden_dim=query_size, #256, #args.MASK_FORMER_HIDDEN_DIM,
+            num_queries=1, #12, #args.MASK_FORMER_NUM_OBJECT_QUERIES,
+            nheads=8, #args.MASK_FORMER_NHEADS,
+            dropout=0, #args.MASK_FORMER_DROPOUT,
+            dim_feedforward=1024, #args.MASK_FORMER_DIM_FEEDFORWARD,
+            enc_layers=1, #args.MASK_FORMER_ENC_LAYERS,
+            dec_layers=4, #args.MASK_FORMER_DEC_LAYERS,
+            pre_norm=False,
+            mask_dim=64, #32, #args.SEM_SEG_HEAD_MASK_DIM,
+            deep_supervision=True,
+            enforce_input_project=False,
         )
 
 
@@ -200,58 +218,38 @@ class MyModel(nn.Module):
         """
         
         # First Way: FiLM Condition + MLP
-        x_latent = self.film(x_latent, Z) # BF: torch.Size([8, 512, 64, 36]) torch.Size([8, 768]) -> torch.Size([8, 512, 64, 36])
-        x_latent = x_latent.permute(0, 2, 1, 3) # torch.Size([BS, 64, 256, 32*4])
-        x_latent = self.mlp(x_latent) # ([BS=2, C_e=64, N=2->1])
+        if self.mix_query_mode == "FiLM":
+            x_latent = self.film(x_latent, Z) # BF: torch.Size([BS, 512, 64, 36]) torch.Size([BS, 768]) -> torch.Size([BS, 512, 64, 36])
+            x_latent = x_latent.permute(0, 2, 1, 3) # torch.Size([BS, 64, 256, 32*4])
+            x_latent = self.mlp(x_latent) # ([BS=2, C_e=64, N=2->1])
+            
+            # Mask estim
+            pred_mask = torch.einsum('bcft,bcn->bnft', x, x_latent) # torch.Size([4, 2->1, 512, 256*4])
         
-        # Mask estim
-        pred_mask = torch.einsum('bcft,bcn->bnft', x, x_latent) # torch.Size([4, 2->1, 512, 256*4])
+        # Second Way: Self-attention + MLP
+        elif self.mix_query_mode == "Transformer":
+            pred_mask = self.net_maskformer(x_latent, x, batch.metadata["stem"], Z)
+                    
+        else:
+            print("Wrong mix_query_mode!")
+        
+        # Mask with original spectrogram
         target = self.mask(batch.mixture.spectrogram, pred_mask)
-        # target = self.mask(batch.mixture.spectrogram, pred_mask[:,0,:,:]) 
-        # non_target = self.mask(batch.mixture.spectrogram, pred_mask[:,1,:,:])
-        gt_mask = self.stft(batch.sources["target"].audio) / (batch.mixture.spectrogram + self.eps)
+        # gt_mask = self.stft(batch.sources["target"].audio) / (batch.mixture.spectrogram + self.eps)
         
-        batch.masks = SimpleishNamespace(
-            pred=pred_mask, 
-            ground_truth=gt_mask,
-        )
+        # batch.masks = SimpleishNamespace(
+        #     pred=pred_mask, 
+        #     ground_truth=gt_mask,
+        # )
         
         # Write the predicted results back to batch data
         batch.estimates["target"] = SimpleishNamespace(
             audio=self.istft(target) #, spectrogram=s
         )
 
-        # batch.estimates["target"] = SimpleishNamespace(
-        #     audio=self.istft(target) #, spectrogram=target[:,0,:,:]
-        # )
-        # batch.estimates["non-target"] = SimpleishNamespace(
-        #     audio=self.istft(non_target) #, spectrogram=non_target[:,1,:,:]
-        # )
-    
         return batch
 
 
-
-
-
-
-# class SelfAttentionModel(nn.Module):
-#     def __init__(
-#         self,  
-#         src_dim=512,
-#         embed_dim=768, 
-#         num_heads=8,
-#     ):
-#         super(SelfAttentionModel, self).__init__()
-#         self.query_dim
-#         self.embed_dim = embed_dim
-#         self.query_proj = nn.Linear(embed_dim, src_dim)
-#         self.multihead_attn = nn.MultiheadAttention(src_dim, num_heads)
-        
-        
-#     def forward(self, src, query):
-        
-#         return src
 
 
 
