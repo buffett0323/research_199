@@ -56,10 +56,10 @@ Dataset Structure:
 wandb_use = True # False
 lr = 1e-3 # 1e-4
 num_epochs = 500
-batch_size = 16 # 8
+batch_size = 32 # 8
 n_srcs = 1 # 2
 emb_dim = 768 # For BEATs
-mix_query_mode = "Transformer" #"FiLM"
+mix_query_mode =  "FiLM" # "Transformer"
 q_enc = "Passt"
 config_path = "config/train.yml"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -78,7 +78,7 @@ if wandb_use:
         project="Query_ss",
         config={
             "learning_rate": lr,
-            "architecture": "Transformer_UNet Using Other's dataset",
+            "architecture": "Transformer_UNet Using 9 stems",
             "dataset": "MoisesDB",
             "epochs": num_epochs,
         },

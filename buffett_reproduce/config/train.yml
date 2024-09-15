@@ -3,7 +3,7 @@ seed: 23
 
 
 # Data configuration
-data: "config/data/setup-a/moisesdb-vdb-query.yml"
+data: "config/data/setup-b/moisesdb-vdbgp-query.yml" # "config/data/setup-a/moisesdb-vdb-query.yml"
 
 
 # Model configuration
@@ -28,6 +28,11 @@ stems:
   - "drums"
   - "lead_male_singer"
   - "lead_female_singer"
+  - "distorted_electric_guitar"
+  - "clean_electric_guitar"
+  - "acoustic_guitar"
+  - 'grand_piano'
+  - 'electric_piano'
 
 # Fast run flag
 fast_run: false
