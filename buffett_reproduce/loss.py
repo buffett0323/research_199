@@ -111,27 +111,39 @@ class L1SNRDecibelMatchLoss(_Loss):
         self.decibel_match = DecibelMatchLoss(dbeps)
         self.db_weight = db_weight
 
-    def forward(self, y_pred, y_true):
-        return self.l1snr(y_pred, y_true) + self.decibel_match(y_pred, y_true)
+    def forward(self, batch):
+        loss_l1snr = self.l1snr(batch.estimates["target"].audio, batch.sources["target"].audio)
+        loss_dem = self.decibel_match(batch.estimates["target"].audio, batch.sources["target"].audio)
+        return loss_l1snr + loss_dem
 
 
 class L1SNR_Recons_Loss(_Loss):
-    """ Adding Reconstruction Loss """
+    """ Self-defined Loss Function """
     def __init__(
         self, 
         l1snr_eps=1e-3, 
         dbeps=1e-3,
+        mask_type="MSE", 
     ):
         super().__init__()
         self.l1snr = L1SNRLoss(l1snr_eps)
-        self.l1loss = nn.L1Loss()
         self.decibel_match = DecibelMatchLoss(dbeps)
+        self.mask_type = mask_type
+        
+        if mask_type == "MSE":
+            self.mask_loss = nn.MSELoss()
+        elif mask_type == "BCE":
+            self.mask_loss = nn.BCELoss()
+        elif mask_type == "L1":
+            self.mask_loss = nn.L1Loss()
  
         
     def forward(self, batch):
         
-        # 1. Calculate L1 Loss for Mask prediction
-        loss_masks = self.l1loss(batch.masks.pred, batch.masks.ground_truth)
+        # 1. Calculate Loss for Mask prediction
+        if self.mask_type == "BCE":
+            batch.masks.pred = torch.sigmoid(batch.masks.pred)
+        loss_masks = self.mask_loss(batch.masks.pred, batch.masks.ground_truth)
         
         # 2. Calculate the L1SNR Loss of Separated query track
         loss_l1snr = self.l1snr(batch.estimates["target"].audio, batch.sources["target"].audio)
@@ -154,7 +166,7 @@ if __name__ == "__main__":
     S_k = torch.randn(B, K, N)
 
     # Instantiate loss function
-    loss_fn = L1SNR_Recons_Loss()
+    loss_fn = L1SNRDecibelMatchLoss()
 
     # Calculate loss
     loss = loss_fn(predicted_masks, gen_masks, gt_stft, S_k)

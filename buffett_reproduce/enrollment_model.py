@@ -14,12 +14,12 @@ from torch.nn.parameter import Parameter
 from models.e2e.bandit.bandsplit import BandSplitModule
 from models.e2e.bandit.utils import MusicalBandsplitSpecification
 from models.e2e.bandit.tfmodel import SeqBandModellingModule
-from models.e2e.querier.passt import Passt, PasstWrapper
+from models.e2e.querier.passt import Passt
 from models.e2e.base import BaseEndToEndModule
 from models.types import InputType, OperationMode, SimpleishNamespace
 from beats.BEATs import BEATs, BEATsConfig
 
-from unet import UnetIquery, UnetTranspose2D
+from unet import UnetTranspose2D
 from film import FiLM
 from transformer import TransformerPredictor
 
@@ -120,20 +120,21 @@ class MyModel(nn.Module):
             num_layers=3,
         )
         
-        self.net_maskformer = TransformerPredictor(
-            in_channels=query_size, #256, #args.in_channels,
-            hidden_dim=query_size, #256, #args.MASK_FORMER_HIDDEN_DIM,
-            num_queries=1, #12, #args.MASK_FORMER_NUM_OBJECT_QUERIES,
-            nheads=8, #args.MASK_FORMER_NHEADS,
-            dropout=0, #args.MASK_FORMER_DROPOUT,
-            dim_feedforward=1024, #args.MASK_FORMER_DIM_FEEDFORWARD,
-            enc_layers=1, #args.MASK_FORMER_ENC_LAYERS,
-            dec_layers=4, #args.MASK_FORMER_DEC_LAYERS,
-            pre_norm=False,
-            mask_dim=64, #32, #args.SEM_SEG_HEAD_MASK_DIM,
-            deep_supervision=True,
-            enforce_input_project=False,
-        )
+        if self.mix_query_mode == "Transformer":
+            self.net_maskformer = TransformerPredictor(
+                in_channels=query_size, #256, #args.in_channels,
+                hidden_dim=query_size, #256, #args.MASK_FORMER_HIDDEN_DIM,
+                num_queries=1, #12, #args.MASK_FORMER_NUM_OBJECT_QUERIES,
+                nheads=8, #args.MASK_FORMER_NHEADS,
+                dropout=0, #args.MASK_FORMER_DROPOUT,
+                dim_feedforward=1024, #args.MASK_FORMER_DIM_FEEDFORWARD,
+                enc_layers=1, #args.MASK_FORMER_ENC_LAYERS,
+                dec_layers=4, #args.MASK_FORMER_DEC_LAYERS,
+                pre_norm=False,
+                mask_dim=64, #32, #args.SEM_SEG_HEAD_MASK_DIM,
+                deep_supervision=True,
+                enforce_input_project=False,
+            )
 
 
     def instantiate_beats(

@@ -56,10 +56,11 @@ Dataset Structure:
 wandb_use = True # False
 lr = 1e-3 # 1e-4
 num_epochs = 500
-batch_size = 32 # 8
-n_srcs = 1 # 2
+batch_size = 2 # 8
+n_srcs = 1
 emb_dim = 768 # For BEATs
-mix_query_mode =  "FiLM" # "Transformer"
+query_size = 256 # 512
+mix_query_mode = "Transformer" # "FiLM" # "Transformer"
 q_enc = "Passt"
 config_path = "config/train.yml"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -82,7 +83,7 @@ if wandb_use:
             "dataset": "MoisesDB",
             "epochs": num_epochs,
         },
-        notes="New UNET with Old Loss",
+        notes="New UNET + Old Loss + 256 query size",
     )
 
 
@@ -105,6 +106,7 @@ datamodule = MoisesDataModule(
 # Instantiate the enrollment model
 model = MyModel(
     embedding_size=emb_dim, 
+    query_size=query_size,
     n_masks=n_srcs,
     mix_query_mode=mix_query_mode,
     q_enc=q_enc,
