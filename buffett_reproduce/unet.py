@@ -91,12 +91,12 @@ class UnetTranspose2D(nn.Module):
         #layer 5 up:
         x = self.uprelu5(torch.cat([x5, x], 1))
         x = self.upconvtrans5(x)
-        # x_latent = x # revised place
+        x_latent = x # revised place
 
         #layer 4 up:
         x = self.uprelu4(torch.cat([x4, x], 1))
         x = self.upconvtrans4(x)
-        x_latent = x # original place
+        # x_latent = x # original place
 
         #layer 3 up:
         x = self.uprelu3(torch.cat([x3, x], 1))

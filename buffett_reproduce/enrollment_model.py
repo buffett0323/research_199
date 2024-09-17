@@ -236,12 +236,12 @@ class MyModel(nn.Module):
         
         # Mask with original spectrogram
         target = self.mask(batch.mixture.spectrogram, pred_mask)
-        # gt_mask = self.stft(batch.sources["target"].audio) / (batch.mixture.spectrogram + self.eps)
+        gt_mask = self.stft(batch.sources["target"].audio) / (batch.mixture.spectrogram + self.eps)
         
-        # batch.masks = SimpleishNamespace(
-        #     pred=pred_mask, 
-        #     ground_truth=gt_mask,
-        # )
+        batch.masks = SimpleishNamespace(
+            pred=pred_mask, 
+            ground_truth=gt_mask,
+        )
         
         # Write the predicted results back to batch data
         batch.estimates["target"] = SimpleishNamespace(
