@@ -20,7 +20,7 @@ from models.types import InputType, OperationMode, SimpleishNamespace
 from beats.BEATs import BEATs, BEATsConfig
 
 from unet import UnetTranspose2D
-from film import FiLM
+from conditioning import FiLM
 from transformer import TransformerPredictor
 
 
@@ -231,6 +231,10 @@ class MyModel(nn.Module):
         elif self.mix_query_mode == "Transformer":
             pred_mask = self.net_maskformer(x_latent, x, batch.metadata["stem"], Z)
                     
+                    
+        elif self.mix_query_mode == "l":
+            a = 0
+            
         else:
             print("Wrong mix_query_mode!")
         

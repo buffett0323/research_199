@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from mir_eval.separation import bss_eval_sources
 from sklearn.model_selection import train_test_split
 
-from bandit_model import MyBandSplit
+from bandit_model import MyBandSplit, BandSplitMamba
 # from load_data import BEATS_path, ORIG_mixture, ORIG_target # , stems
 # from dataset import MusicDataset
 from loss import L1SNR_Recons_Loss, L1SNRDecibelMatchLoss
@@ -34,10 +34,10 @@ from data.moisesdb.datamodule import (
 
 
 # Init settings
-wandb_use = True # False
+wandb_use = False # False
 lr = 1e-3 #1e-4
 num_epochs = 500
-batch_size = 2 #4
+batch_size = 16 #4
 config_path = "config/train.yml"
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Training on device:", device)
@@ -79,21 +79,12 @@ datamodule = MoisesDataModule(
 
 
 
-# for batch in tqdm(datamodule.train_dataloader()):
-#     pass
-
-# for batch in tqdm(datamodule.val_dataloader()):
-#     pass
-
-# # for batch in tqdm(datamodule.test_dataloader()):
-#     # pass
-
 
 
 
 # Instantiate the enrollment model
 model_kwargs = config.model.get("kwargs", {})
-model = MyBandSplit(
+model = BandSplitMamba( #MyBandSplit(
     **model_kwargs,
     stems=stems,
 ).to(device)
@@ -124,7 +115,8 @@ for epoch in tqdm(range(num_epochs)):
         batch = model(batch)
 
         # Compute the loss
-        loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+        loss = criterion(batch)
+        # loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
         train_loss += loss.item()
         
         # Backward pass and optimization
@@ -149,7 +141,8 @@ for epoch in tqdm(range(num_epochs)):
                 batch = model(batch)
 
                 # Compute the loss
-                loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+                loss = criterion(batch)
+                # loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
                 val_loss += loss.item()
 
                 # Calculate metrics
@@ -195,8 +188,8 @@ with torch.no_grad():
         batch = model(batch)
 
         # Compute the loss
-        # loss = criterion(batch)
-        loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+        loss = criterion(batch)
+        # loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
         test_loss += loss.item()
 
         # Calculate metrics
