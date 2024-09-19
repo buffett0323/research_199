@@ -53,10 +53,10 @@ Dataset Structure:
 """
 
 # Init settings
-wandb_use = False # False
+wandb_use = True # False
 lr = 1e-3 # 1e-4
 num_epochs = 500
-batch_size = 8 # 8
+batch_size = 32 # 8
 n_srcs = 1
 emb_dim = 768 # For BEATs
 query_size = 512 # 512
@@ -84,7 +84,7 @@ if wandb_use:
             "dataset": "MoisesDB",
             "epochs": num_epochs,
         },
-        notes=f"New UNET + {mask_type} Loss + 512 query size",
+        notes=f"{mix_query_mode} + {mask_type} Loss + 512 query size",
     )
 
 
