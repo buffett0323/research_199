@@ -20,7 +20,7 @@ from models.types import InputType, OperationMode, SimpleishNamespace
 from beats.BEATs import BEATs, BEATsConfig
 
 from unet import UnetTranspose2D
-from conditioning import FiLM
+from conditioning import FiLM, Hyper_FiLM, FiLMHyperNetwork
 from transformer import TransformerPredictor
 
 
@@ -88,13 +88,6 @@ class MyModel(nn.Module):
             center=True,
             onesided=True,
         )
-
-        self.film = FiLM(
-            cond_embedding_dim=embedding_size, #256,
-            channels=query_size, #128, 
-            additive=True, 
-            multiplicative=True
-        )
         
 
         if q_enc == "beats":
@@ -134,6 +127,27 @@ class MyModel(nn.Module):
                 mask_dim=64, #32, #args.SEM_SEG_HEAD_MASK_DIM,
                 deep_supervision=True,
                 enforce_input_project=False,
+            )
+        elif self.mix_query_mode == "FiLM":
+            self.film = FiLM(
+                cond_embedding_dim=embedding_size, #768,
+                channels=query_size, #512, 
+                additive=True, 
+                multiplicative=True
+            )
+        elif self.mix_query_mode == "Hyper_FiLM":
+            hypernet = FiLMHyperNetwork(
+                query_dim=embedding_size, #768,
+                channels=query_size, #512,
+                depth=2, 
+                activation="ELU"
+            )
+            self.hyper_film = Hyper_FiLM(
+                cond_embedding_dim=embedding_size, #768,
+                channels=query_size, #512, 
+                hypernetwork=hypernet, 
+                additive=True, 
+                multiplicative=True
             )
 
 
@@ -216,6 +230,7 @@ class MyModel(nn.Module):
             Ways to Combine Mixture & Query
             1. FiLM Condition + MLP
             2. Transformer Self attention or Cross attention
+            3. Hyper Network FiLM Condition + MLP
         """
         
         # First Way: FiLM Condition + MLP
@@ -232,11 +247,18 @@ class MyModel(nn.Module):
             pred_mask = self.net_maskformer(x_latent, x, batch.metadata["stem"], Z)
                     
                     
-        elif self.mix_query_mode == "l":
-            a = 0
+        # Third Way: Hyper Network FiLM Condition + MLP            
+        elif self.mix_query_mode == "Hyper_FiLM":
+            x_latent = self.hyper_film(x_latent, Z) # BF: torch.Size([BS, 512, 64, 36]) torch.Size([BS, 768]) -> torch.Size([BS, 512, 64, 36])
+            x_latent = x_latent.permute(0, 2, 1, 3) # torch.Size([BS, 64, 256, 32*4])
+            x_latent = self.mlp(x_latent) # ([BS=2, C_e=64, N=2->1])
+            
+            # Mask estim
+            pred_mask = torch.einsum('bcft,bcn->bnft', x, x_latent) # torch.Size([4, 2->1, 512, 256*4])
             
         else:
             print("Wrong mix_query_mode!")
+            
         
         # Mask with original spectrogram
         target = self.mask(batch.mixture.spectrogram, pred_mask)
