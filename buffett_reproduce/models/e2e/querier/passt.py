@@ -91,7 +91,3 @@ class PasstWrapper(nn.Module):
         z = self.proj(z)
 
         return z
-    
-Passt(original_fs=44100,
-    passt_fs=32000,
-)
