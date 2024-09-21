@@ -218,7 +218,7 @@ class MyModel(nn.Module):
         # Separate mixture spec -> unet
         x = batch.mixture.spectrogram
         x = torch.abs(x)
-        x, x_latent = self.unet(x) # BF: torch.Size([BS, 1, 1025, 576])
+        x, x_latent = self.unet(x) # BF: torch.Size([BS, 1, 1025, 576]) --> (BS, 512, 64, 36) ÷ 16
 
         # Query encoder
         if self.q_enc == "beats":
