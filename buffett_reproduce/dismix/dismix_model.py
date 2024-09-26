@@ -87,7 +87,7 @@ class PitchEncoder(nn.Module):
         self, 
         input_dim=128, 
         hidden_dim=256, 
-        pitch_classes=52, 
+        pitch_classes=52, # true labels not 0-51
         output_dim=64
     ):
         super(PitchEncoder, self).__init__()
