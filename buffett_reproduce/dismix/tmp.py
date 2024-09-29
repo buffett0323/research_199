@@ -1,5 +1,6 @@
 import pretty_midi
 import os
+import librosa
 from tqdm import tqdm 
 
 
@@ -15,6 +16,7 @@ def extract_pitch_labels(midi_file):
         if not instrument.is_drum:
             for note in instrument.notes:
                 pitch_labels.append(note.pitch)
+    print(pitch_labels)
     return pitch_labels
 
 
@@ -32,6 +34,18 @@ for f in tqdm(os.listdir(directory)):
         if filename.endswith('.mid'):
             midi_file_path = os.path.join(midi_directory, filename)
             pitches += extract_pitch_labels(midi_file_path)
+            
+
+            # Load the audio file
+            wav_file_path = midi_file_path.replace("stems_midi", "stems_audio").replace(".mid", ".wav")
+            y, sr = librosa.load(wav_file_path, sr=None)  # sr=None preserves the original sample rate
+
+            # Calculate the duration in seconds
+            duration = librosa.get_duration(y=y, sr=sr)
+
+            print(f"Duration of the audio file: {duration} seconds")
+
+        
 
     # Display unique pitch labels for violin
     sorted_pitch = sorted(set(pitches))

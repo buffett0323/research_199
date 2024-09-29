@@ -13,6 +13,38 @@ def reparameterize(mean, logvar):
     return mean + eps * std
 
 
+class Conv1DEncoder(nn.Module):
+    def __init__(self, input_channels, output_channels, kernel_size, stride, padding, norm_layer, activation):
+        super(Conv1DEncoder, self).__init__()
+        self.conv = nn.Conv1d(input_channels, output_channels, kernel_size, stride, padding)
+        self.norm = norm_layer(output_channels) if norm_layer else None
+        self.activation = activation() if activation else None
+
+    def forward(self, x):
+        x = self.conv(x)
+        if self.norm:
+            x = self.norm(x)
+        if self.activation:
+            x = self.activation(x)
+        return x
+
+class MixtureQueryEncoder(nn.Module):
+    def __init__(self):
+        super(MixtureQueryEncoder, self).__init__()
+        self.encoder_layers = nn.Sequential(
+            Conv1DEncoder(128, 768, 3, 1, 0, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(768, 768, 3, 1, 1, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(768, 768, 4, 2, 1, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(768, 768, 3, 1, 1, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(768, 768, 3, 1, 1, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(768, 64, 1, 1, 1, None, None)
+        )
+
+    def forward(self, x):
+        x = self.encoder_layers(x)
+        return torch.mean(x, dim=-1)  # Mean pooling along the temporal dimension
+
+
 class StochasticBinarizationLayer(nn.Module):
     def __init__(self):
         super(StochasticBinarizationLayer, self).__init__()
@@ -36,49 +68,75 @@ class StochasticBinarizationLayer(nn.Module):
 
 
 
+# class TimbreEncoder(nn.Module):
+#     def __init__(
+#         self,          
+#         input_dim=128, 
+#         hidden_dim=768, 
+#         output_dim=64
+#     ):
+#         super(TimbreEncoder, self).__init__()
+        
+#         # Define Conv1D layers as specified in the paper
+#         self.conv1 = nn.Conv1d(input_dim, hidden_dim, kernel_size=3, stride=1, padding=0)
+#         self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+#         self.conv3 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1)
+#         self.conv4 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+#         self.conv5 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
+#         self.conv6 = nn.Conv1d(hidden_dim, output_dim, kernel_size=1, stride=1, padding=1)
+        
+#         # Gaussian parameterization layers
+#         self.fc_mu = nn.Linear(output_dim, output_dim)
+#         self.fc_logvar = nn.Linear(output_dim, output_dim)
+
+#     def forward(self, x):
+#         # Apply convolutional layers with ReLU activation
+#         x = F.relu(self.conv1(x))
+#         x = F.relu(self.conv2(x))
+#         x = F.relu(self.conv3(x))
+#         x = F.relu(self.conv4(x))
+#         x = F.relu(self.conv5(x))
+#         x = self.conv6(x)
+        
+#         # Average pooling along the temporal dimension
+#         x = torch.mean(x, dim=-1)  # Shape: [batch_size, output_dim]
+
+#         # Compute mean and log-variance for Gaussian distribution
+#         mu = self.fc_mu(x)
+#         logvar = self.fc_logvar(x)
+        
+#         # Reparameterization trick to sample from Gaussian
+#         std = torch.exp(0.5 * logvar)
+#         epsilon = torch.randn_like(std)
+#         z = mu + epsilon * std  # Latent vector for timbre
+        
+#         return z, mu, logvar  # Return timbre latent, mean, and log-variance
+
+
 class TimbreEncoder(nn.Module):
     def __init__(
-        self,          
-        input_dim=128, 
-        hidden_dim=768, 
+        self,
+        input_dim=128,
+        hidden_dim=256,
         output_dim=64
     ):
         super(TimbreEncoder, self).__init__()
-        
-        # Define Conv1D layers as specified in the paper
-        self.conv1 = nn.Conv1d(input_dim, hidden_dim, kernel_size=3, stride=1, padding=0)
-        self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
-        self.conv3 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1)
-        self.conv4 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
-        self.conv5 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
-        self.conv6 = nn.Conv1d(hidden_dim, output_dim, kernel_size=1, stride=1, padding=1)
-        
-        # Gaussian parameterization layers
-        self.fc_mu = nn.Linear(output_dim, output_dim)
-        self.fc_logvar = nn.Linear(output_dim, output_dim)
+        self.encoder_layers = nn.Sequential(
+            Conv1DEncoder(input_dim, input_dim, 5, 2, 0, lambda x: nn.GroupNorm(1, x), nn.ReLU),
+            Conv1DEncoder(input_dim, input_dim, 5, 2, 0, lambda x: nn.GroupNorm(1, x), nn.ReLU),
+            Conv1DEncoder(input_dim, input_dim, 5, 2, 0, lambda x: nn.GroupNorm(1, x), nn.ReLU),
+            nn.Conv1d(input_dim, hidden_dim, 1, 1, 0)
+        )
+        self.mean_layer = nn.Linear(hidden_dim, output_dim)  # Mean of the Gaussian
+        self.var_layer = nn.Linear(hidden_dim, output_dim)   # Variance of the Gaussian
 
-    def forward(self, x):
-        # Apply convolutional layers with ReLU activation
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
-        x = F.relu(self.conv5(x))
-        x = self.conv6(x)
-        
-        # Average pooling along the temporal dimension
-        x = torch.mean(x, dim=-1)  # Shape: [batch_size, output_dim]
-
-        # Compute mean and log-variance for Gaussian distribution
-        mu = self.fc_mu(x)
-        logvar = self.fc_logvar(x)
-        
-        # Reparameterization trick to sample from Gaussian
-        std = torch.exp(0.5 * logvar)
-        epsilon = torch.randn_like(std)
-        z = mu + epsilon * std  # Latent vector for timbre
-        
-        return z, mu, logvar  # Return timbre latent, mean, and log-variance
+    def forward(self, em, eq):
+        concat_input = torch.cat([em, eq], dim=-1)  # Concatenate em and eq
+        x = self.encoder_layers(concat_input)
+        x = x.squeeze(-1)  # Remove unnecessary dimensions
+        mean = self.mean_layer(x)
+        var = self.var_layer(x)
+        return mean, var
 
 
 # Pitch Encoder Implementation from Table 5
@@ -125,69 +183,66 @@ class PitchEncoder(nn.Module):
             nn.Linear(output_dim, output_dim),
         )
 
-    def forward(self, x):
-        # Pass through the transcriber to get pitch logits
-        pitch_logits = self.transcriber(x)  # Shape: [batch_size, pitch_classes]
-        
-        # Apply Stochastic Binarization Layer to logits
-        pitch_binarized = self.sb_layer(pitch_logits)  # Binarize using stochastic binarization
-        
-        # Project the binarized pitch to the latent space
-        pitch_latent = self.fc_proj(pitch_binarized)  # Shape: [batch_size, output_dim]
 
+    def forward(self, em, eq):
+        concat_input = torch.cat([em, eq], dim=-1)  # Concatenate em and eq
+        pitch_logits = self.transcriber(concat_input)
+        y_bin = self.sb_layer(pitch_logits)  # Apply binarisation
+        pitch_latent = self.fc_proj(y_bin)
         return pitch_latent, pitch_logits
+    
+    
 
-
-
-# Combining FiLM layer
 class FiLM(nn.Module):
-    def __init__(self, input_dim, latent_dim):
+    def __init__(self, pitch_dim, timbre_dim):
         super(FiLM, self).__init__()
-        self.scale = nn.Linear(latent_dim, input_dim)
-        self.shift = nn.Linear(latent_dim, input_dim)
+        self.scale = nn.Linear(timbre_dim, pitch_dim)
+        self.shift = nn.Linear(timbre_dim, pitch_dim)
     
     def forward(self, pitch_latent, timbre_latent):
         scale = self.scale(timbre_latent)
         shift = self.shift(timbre_latent)
         return scale * pitch_latent + shift
-    
-    
 
 
-class Decoder(nn.Module):
+class DisMixDecoder(nn.Module):
     def __init__(
         self, 
-        input_dim=64, 
-        hidden_dim=128, 
+        pitch_dim=64, 
+        timbre_dim=64, 
+        gru_hidden_dim=256, 
         output_dim=128, 
-        num_frames=10
+        num_layers=2
     ):
-        super(Decoder, self).__init__()
-        self.num_frames = num_frames
-        
-        # FiLM layer to modulate pitch latent with timbre latent
-        self.film_layer = FiLM(input_dim, input_dim)
-        
-        # Bi-directional GRU layers to transform the latent representation
-        self.gru = nn.GRU(input_dim, hidden_dim, num_layers=2, batch_first=True, bidirectional=True)
-        
-        # Linear layer to transform GRU output to match the original spectrogram dimension
-        self.linear = nn.Linear(2 * hidden_dim, output_dim)  # 2 for bidirectional GRU
+        super(DisMixDecoder, self).__init__()
+        self.film = FiLM(pitch_dim, timbre_dim)
+        self.gru = nn.GRU(input_size=pitch_dim, hidden_size=gru_hidden_dim, num_layers=num_layers, batch_first=True, bidirectional=True)
+        self.linear = nn.Linear(gru_hidden_dim * 2, output_dim)  # Bi-directional GRU output dimension is doubled
+        self.output_transform = nn.Sequential(
+            nn.Conv1d(output_dim, output_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(output_dim),
+            nn.ReLU(),
+            nn.Conv1d(output_dim, output_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(output_dim),
+            nn.ReLU(),
+            nn.Conv1d(output_dim, 1, kernel_size=1),  # Convert back to 1D waveform or spectrogram
+        )
     
-    def forward(self, pitch_latent, timbre_latent):
-        # Combine pitch and timbre latent using FiLM
-        s = self.film_layer(pitch_latent, timbre_latent)
+    def forward(self, pitch_latents, timbre_latents):
+        # FiLM layer: modulates pitch latents based on timbre latents
+        source_latents = self.film(pitch_latents, timbre_latents)
         
-        # Broadcast along the time axis to match the number of frames
-        s = s.unsqueeze(1).repeat(1, self.num_frames, 1)  # (batch_size, num_frames, input_dim)
+        # Temporal Broadcasting: Expand source_latents along time axis if necessary
+        source_latents = source_latents.unsqueeze(1).repeat(1, 10, 1)
         
-        # Pass through the GRU layers
-        gru_output, _ = self.gru(s)
+        gru_output, _ = self.gru(source_latents)
+        gru_output = self.linear(gru_output)
         
-        # Pass through the linear layer to reconstruct the spectrogram
-        reconstructed_spectrogram = self.linear(gru_output)  # (batch_size, num_frames, output_dim)
+        # Output transform to convert to spectrogram or waveform
+        # Transpose to (batch, features, time) for Conv1d layers
+        output = self.output_transform(gru_output.transpose(1, 2))
         
-        return reconstructed_spectrogram
+        return output # reconstructed spectrogram
 
 
 
@@ -198,18 +253,46 @@ class DisMixModel(nn.Module):
         self, 
         input_dim=128, 
         latent_dim=64, 
-        hidden_dim=128, 
-        num_frames=10
+        hidden_dim=256, 
+        gru_hidden_dim=256,
+        num_frames=10,
+        pitch_classes=52,
+        output_dim=128,
     ):
         super(DisMixModel, self).__init__()
-        self.pitch_encoder = PitchEncoder(input_dim, latent_dim)
-        self.timbre_encoder = TimbreEncoder(input_dim, latent_dim)
-        self.decoder = Decoder(input_dim=latent_dim, hidden_dim=hidden_dim, output_dim=input_dim, num_frames=num_frames)
+        self.mixture_encoder = MixtureQueryEncoder()
+        self.query_encoder = MixtureQueryEncoder()
+        self.pitch_encoder = PitchEncoder(
+            input_dim=input_dim, 
+            hidden_dim=hidden_dim, 
+            pitch_classes=pitch_classes, # true labels not 0-51
+            output_dim=latent_dim
+        )
+        self.timbre_encoder = TimbreEncoder(
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            output_dim=latent_dim
+        )
+        self.decoder = DisMixDecoder(
+            pitch_dim=latent_dim, 
+            timbre_dim=latent_dim, 
+            gru_hidden_dim=gru_hidden_dim, 
+            output_dim=output_dim, 
+            num_layers=2
+        )
         
     def forward(self, mixture, query):
+        
+        # Encode mixture and query
+        em = self.mixture_encoder(mixture)
+        eq = self.query_encoder(query)
+        
         # Encode pitch and timbre latents
-        pitch_latent, pitch_logits = self.pitch_encoder(mixture)
-        _, timbre_mean, timbre_logvar = self.timbre_encoder(query)
+        pitch_latent, pitch_logits = self.pitch_encoder(em, eq)
+        timbre_mean, timbre_logvar = self.timbre_encoder(em, eq)
+        
+        # pitch_latent, pitch_logits = self.pitch_encoder(mixture)
+        # _, timbre_mean, timbre_logvar = self.timbre_encoder(query)
         
         # Reparameterize to get timbre latent
         timbre_latent = reparameterize(timbre_mean, timbre_logvar)
