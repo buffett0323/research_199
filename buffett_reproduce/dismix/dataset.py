@@ -22,7 +22,9 @@ class CocoChoralesTinyDataset(Dataset):
         hop_length=512,
         window_size=1024,
         time_resolution=0.01,  # For pitch extraction
-        crop_frames=10  # Number of frames to crop (320ms)
+        crop_frames=10,  # Number of frames to crop (320ms)
+        start_pitch=33,
+        num_pitch_classes=52,
     ):
         """
         Initialize the dataset.
@@ -44,6 +46,8 @@ class CocoChoralesTinyDataset(Dataset):
         self.time_resolution = time_resolution
         self.crop_frames = crop_frames
         self.strategy = "mode"
+        self.start_pitch = start_pitch
+        self.num_pitch_classes = num_pitch_classes
         
         self.file_list = self._load_folder_list(self.data_dir)
         self.mel_spectrogram_transform = torchaudio.transforms.MelSpectrogram(
@@ -138,12 +142,15 @@ class CocoChoralesTinyDataset(Dataset):
         
         # Define the pitch range for 52 possible pitches
         num_pitches = 128  # MIDI pitch values range from 0 to 127
+        
+        # Pitch annotation data
+        pitch_annotation = np.zeros(self.num_pitch_classes, dtype=np.float32)
 
         num_time_steps = int(np.ceil((end_time - start_time) / self.time_resolution))
         pitch_matrix = np.zeros((num_time_steps, num_pitches), dtype=np.float32)
         
         # Iterate through each instrument in the MIDI file
-        for instrument in midi_data.instruments:
+        for idx, instrument in enumerate(midi_data.instruments):
             # Skip drum tracks if any
             if instrument.is_drum:
                 continue
@@ -164,19 +171,23 @@ class CocoChoralesTinyDataset(Dataset):
                 
                     # Add the pitch information weighted by the overlap duration
                     pitch_matrix[start_frame:end_frame, note.pitch] += overlap_duration
+                    
+                    # Pitch annotation
+                    pitch_idx = note.pitch - self.start_pitch
+                    if 0 <= pitch_idx and pitch_idx < self.num_pitch_classes:
+                        pitch_annotation[pitch_idx] = 1
     
     
         # Binarize the pitch matrix (1 if present, 0 if absent)
         pitch_matrix = (pitch_matrix > 0).astype(np.float32)
 
         # Reduce to a smaller pitch range (e.g., first 52 pitches)
-        start_pitch = 34
-        pitch_matrix = pitch_matrix[:, start_pitch:start_pitch + 52]
+        pitch_matrix = pitch_matrix[:, self.start_pitch:self.start_pitch + 52]
         
         # Determine the single pitch label using the specified strategy
         pitch_label = self.get_segment_pitch_label(pitch_matrix, strategy=self.strategy)
         
-        return pitch_label
+        return pitch_label, pitch_annotation
     
     
     def get_segment_pitch_label(self, pitch_matrix, strategy='mode'):
@@ -190,7 +201,7 @@ class CocoChoralesTinyDataset(Dataset):
                             'mode' (most frequent pitch), 'mean', 'median'.
 
         Returns:
-            pitch_label (int): The determined pitch label for the segment.
+            pitch_label (np.ndarray): A one-hot encoded pitch label of shape (52,).
         """
         num_pitches = pitch_matrix.shape[1]
 
@@ -198,24 +209,28 @@ class CocoChoralesTinyDataset(Dataset):
             # Sum across time steps to find the most frequently occurring pitch
             pitch_counts = np.sum(pitch_matrix, axis=0)
             # Determine the pitch with the maximum count (most frequent pitch)
-            pitch_label = np.argmax(pitch_counts)
+            pitch_index = np.argmax(pitch_counts)
         elif strategy == 'mean':
             # Compute a weighted average of the pitch indices based on their occurrence
             pitch_indices = np.arange(num_pitches)
             pitch_counts = np.sum(pitch_matrix, axis=0)
-            pitch_label = int(np.dot(pitch_counts, pitch_indices) / np.sum(pitch_counts))
+            pitch_index = int(np.dot(pitch_counts, pitch_indices) / np.sum(pitch_counts))
         elif strategy == 'median':
             # Flatten the pitch matrix and find the median pitch
             pitches = []
             for pitch_index in range(num_pitches):
                 pitches.extend([pitch_index] * int(np.sum(pitch_matrix[:, pitch_index])))
-            pitch_label = int(np.median(pitches)) if pitches else 0
+            pitch_index = int(np.median(pitches)) if pitches else 0
         else:
             raise ValueError("Invalid strategy. Use 'mode', 'mean', or 'median'.")
+
+        # Create a one-hot encoded vector of shape (52,)
+        pitch_label = np.zeros(num_pitches, dtype=np.float32)
+        pitch_label[pitch_index] = 1  # Set the actual pitch to 1
         
         return pitch_label
 
-
+    
 
     def __len__(self):
         return len(self.file_list)
@@ -245,12 +260,14 @@ class CocoChoralesTinyDataset(Dataset):
         
         # Load pitch annotations for the corresponding segment
         midi_path = query_path.replace(".wav", ".mid").replace("stems_audio", "stems_midi")  # Assuming corresponding MIDI path
-        pitch_label = torch.tensor(self._extract_pitch_annotations(midi_path, start_time, end_time))
-
+        pitch_label, pitch_annotation = self._extract_pitch_annotations(midi_path, start_time, end_time)
+        
+        # print(pitch_annotation.shape)
         return {
             'mixture': mixture,         # Mixture mel spectrogram
             'query': query,             # Query mel spectrogram
-            'pitch_label': pitch_label, # Ground-truth pitch label for the segment
+            'pitch_label': torch.tensor(pitch_label), # Ground-truth pitch label for the segment
+            'pitch_annotation': torch.tensor(pitch_annotation), 
         }
 
 
@@ -260,11 +277,12 @@ if __name__ == "__main__":
     # Usage Example
     data_dir = '/home/buffett/NAS_189/cocochorales_output/main_dataset/'
     dataset = CocoChoralesTinyDataset(data_dir, split='train')
-    data_loader = DataLoader(dataset, batch_size=2, shuffle=True)
+    data_loader = DataLoader(dataset, batch_size=16, shuffle=True)
 
     # Iterate over data_loader
     for batch in data_loader:
-        print(batch["mixture"].shape, batch["query"].shape, batch["pitch_label"])
+        print(batch["mixture"].shape, batch["query"].shape, 
+              batch["pitch_label"].shape,  batch["pitch_annotation"].shape)
         break
     
  

@@ -6,11 +6,6 @@ from torch.utils.data import DataLoader
 
 from dismix_loss import ELBOLoss
 
-# Reparameterization function to obtain the latent from mean and log variance
-def reparameterize(mean, logvar):
-    std = torch.exp(0.5 * logvar)
-    eps = torch.randn_like(std)
-    return mean + eps * std
 
 
 class Conv1DEncoder(nn.Module):
@@ -23,26 +18,37 @@ class Conv1DEncoder(nn.Module):
     def forward(self, x):
         x = self.conv(x)
         if self.norm:
-            x = self.norm(x)
+            x = x.transpose(1, 2)  # Change shape from (batch, channels, sequence) to (batch, sequence, channels)
+            x = self.norm(x)        # Apply LayerNorm to the last dimension (channels)
+            x = x.transpose(1, 2)  # Change back shape to (batch, channels, sequence)
         if self.activation:
             x = self.activation(x)
         return x
 
+
+
 class MixtureQueryEncoder(nn.Module):
-    def __init__(self):
+    def __init__(
+        self,
+        input_dim=128,
+        hidden_dim=768,
+        output_dim=64,
+    ):
         super(MixtureQueryEncoder, self).__init__()
         self.encoder_layers = nn.Sequential(
-            Conv1DEncoder(128, 768, 3, 1, 0, nn.LayerNorm, nn.ReLU),
-            Conv1DEncoder(768, 768, 3, 1, 1, nn.LayerNorm, nn.ReLU),
-            Conv1DEncoder(768, 768, 4, 2, 1, nn.LayerNorm, nn.ReLU),
-            Conv1DEncoder(768, 768, 3, 1, 1, nn.LayerNorm, nn.ReLU),
-            Conv1DEncoder(768, 768, 3, 1, 1, nn.LayerNorm, nn.ReLU),
-            Conv1DEncoder(768, 64, 1, 1, 1, None, None)
+            Conv1DEncoder(input_dim, hidden_dim, 3, 1, 0, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(hidden_dim, hidden_dim, 3, 1, 1, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(hidden_dim, hidden_dim, 4, 2, 1, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(hidden_dim, hidden_dim, 3, 1, 1, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(hidden_dim, hidden_dim, 3, 1, 1, nn.LayerNorm, nn.ReLU),
+            Conv1DEncoder(hidden_dim, output_dim, 1, 1, 1, None, None)
         )
 
     def forward(self, x):
         x = self.encoder_layers(x)
         return torch.mean(x, dim=-1)  # Mean pooling along the temporal dimension
+
+
 
 
 class StochasticBinarizationLayer(nn.Module):
@@ -68,75 +74,61 @@ class StochasticBinarizationLayer(nn.Module):
 
 
 
-# class TimbreEncoder(nn.Module):
-#     def __init__(
-#         self,          
-#         input_dim=128, 
-#         hidden_dim=768, 
-#         output_dim=64
-#     ):
-#         super(TimbreEncoder, self).__init__()
-        
-#         # Define Conv1D layers as specified in the paper
-#         self.conv1 = nn.Conv1d(input_dim, hidden_dim, kernel_size=3, stride=1, padding=0)
-#         self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
-#         self.conv3 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=4, stride=2, padding=1)
-#         self.conv4 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
-#         self.conv5 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=3, stride=1, padding=1)
-#         self.conv6 = nn.Conv1d(hidden_dim, output_dim, kernel_size=1, stride=1, padding=1)
-        
-#         # Gaussian parameterization layers
-#         self.fc_mu = nn.Linear(output_dim, output_dim)
-#         self.fc_logvar = nn.Linear(output_dim, output_dim)
-
-#     def forward(self, x):
-#         # Apply convolutional layers with ReLU activation
-#         x = F.relu(self.conv1(x))
-#         x = F.relu(self.conv2(x))
-#         x = F.relu(self.conv3(x))
-#         x = F.relu(self.conv4(x))
-#         x = F.relu(self.conv5(x))
-#         x = self.conv6(x)
-        
-#         # Average pooling along the temporal dimension
-#         x = torch.mean(x, dim=-1)  # Shape: [batch_size, output_dim]
-
-#         # Compute mean and log-variance for Gaussian distribution
-#         mu = self.fc_mu(x)
-#         logvar = self.fc_logvar(x)
-        
-#         # Reparameterization trick to sample from Gaussian
-#         std = torch.exp(0.5 * logvar)
-#         epsilon = torch.randn_like(std)
-#         z = mu + epsilon * std  # Latent vector for timbre
-        
-#         return z, mu, logvar  # Return timbre latent, mean, and log-variance
-
-
 class TimbreEncoder(nn.Module):
     def __init__(
-        self,
-        input_dim=128,
-        hidden_dim=256,
-        output_dim=64
+        self, 
+        input_dim=128, 
+        hidden_dim=256, 
+        output_dim=64  # Latent space dimension for timbre
     ):
         super(TimbreEncoder, self).__init__()
-        self.encoder_layers = nn.Sequential(
-            Conv1DEncoder(input_dim, input_dim, 5, 2, 0, lambda x: nn.GroupNorm(1, x), nn.ReLU),
-            Conv1DEncoder(input_dim, input_dim, 5, 2, 0, lambda x: nn.GroupNorm(1, x), nn.ReLU),
-            Conv1DEncoder(input_dim, input_dim, 5, 2, 0, lambda x: nn.GroupNorm(1, x), nn.ReLU),
-            nn.Conv1d(input_dim, hidden_dim, 1, 1, 0)
+
+        # Shared architecture with Eφν (PitchEncoder)
+        self.shared_layers = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU()
         )
-        self.mean_layer = nn.Linear(hidden_dim, output_dim)  # Mean of the Gaussian
-        self.var_layer = nn.Linear(hidden_dim, output_dim)   # Variance of the Gaussian
+
+        # Gaussian parameterization layers
+        self.mean_layer = nn.Linear(hidden_dim, output_dim)
+        self.logvar_layer = nn.Linear(hidden_dim, output_dim)
+
+    def reparameterize(self, mean, logvar):
+        """Reparameterization trick to sample from N(mean, var)"""
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mean + eps * std
 
     def forward(self, em, eq):
-        concat_input = torch.cat([em, eq], dim=-1)  # Concatenate em and eq
-        x = self.encoder_layers(concat_input)
-        x = x.squeeze(-1)  # Remove unnecessary dimensions
-        mean = self.mean_layer(x)
-        var = self.var_layer(x)
-        return mean, var
+        # Concatenate the mixture and query embeddings
+        concat_input = torch.cat([em, eq], dim=-1)  # Concatenate along feature dimension
+        
+        # Shared layers forward pass
+        hidden_state = self.shared_layers(concat_input)  # Shared hidden state output
+
+        # Calculate mean and log variance
+        mean = self.mean_layer(hidden_state)  # Mean of the Gaussian distribution
+        logvar = self.logvar_layer(hidden_state)  # Log variance of the Gaussian distribution
+
+        # Sample the timbre latent using the reparameterization trick
+        timbre_latent = self.reparameterize(mean, logvar)
+        
+        return timbre_latent, mean, logvar
+
+
 
 
 # Pitch Encoder Implementation from Table 5
@@ -212,9 +204,12 @@ class DisMixDecoder(nn.Module):
         timbre_dim=64, 
         gru_hidden_dim=256, 
         output_dim=128, 
+        num_frames=10,
         num_layers=2
     ):
         super(DisMixDecoder, self).__init__()
+        self.num_frames = num_frames
+        
         self.film = FiLM(pitch_dim, timbre_dim)
         self.gru = nn.GRU(input_size=pitch_dim, hidden_size=gru_hidden_dim, num_layers=num_layers, batch_first=True, bidirectional=True)
         self.linear = nn.Linear(gru_hidden_dim * 2, output_dim)  # Bi-directional GRU output dimension is doubled
@@ -225,22 +220,17 @@ class DisMixDecoder(nn.Module):
             nn.Conv1d(output_dim, output_dim, kernel_size=3, padding=1),
             nn.BatchNorm1d(output_dim),
             nn.ReLU(),
-            nn.Conv1d(output_dim, 1, kernel_size=1),  # Convert back to 1D waveform or spectrogram
+            nn.Conv1d(output_dim, output_dim, kernel_size=1),  # Convert back to 1D waveform or spectrogram
         )
     
     def forward(self, pitch_latents, timbre_latents):
         # FiLM layer: modulates pitch latents based on timbre latents
         source_latents = self.film(pitch_latents, timbre_latents)
+        source_latents = source_latents.unsqueeze(1).repeat(1, self.num_frames, 1) # Expand source_latents along time axis if necessary
         
-        # Temporal Broadcasting: Expand source_latents along time axis if necessary
-        source_latents = source_latents.unsqueeze(1).repeat(1, 10, 1)
-        
-        gru_output, _ = self.gru(source_latents)
-        gru_output = self.linear(gru_output)
-        
-        # Output transform to convert to spectrogram or waveform
-        # Transpose to (batch, features, time) for Conv1d layers
-        output = self.output_transform(gru_output.transpose(1, 2))
+        output, _ = self.gru(source_latents)
+        output = self.linear(output).transpose(1, 2)
+        output = self.output_transform(output)
         
         return output # reconstructed spectrogram
 
@@ -260,8 +250,16 @@ class DisMixModel(nn.Module):
         output_dim=128,
     ):
         super(DisMixModel, self).__init__()
-        self.mixture_encoder = MixtureQueryEncoder()
-        self.query_encoder = MixtureQueryEncoder()
+        self.mixture_encoder = MixtureQueryEncoder(
+            input_dim=input_dim,
+            hidden_dim=768,
+            output_dim=latent_dim,
+        )
+        self.query_encoder = MixtureQueryEncoder(
+            input_dim=input_dim,
+            hidden_dim=768,
+            output_dim=latent_dim,
+        )
         self.pitch_encoder = PitchEncoder(
             input_dim=input_dim, 
             hidden_dim=hidden_dim, 
@@ -269,8 +267,8 @@ class DisMixModel(nn.Module):
             output_dim=latent_dim
         )
         self.timbre_encoder = TimbreEncoder(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
+            input_dim=input_dim, 
+            hidden_dim=hidden_dim, 
             output_dim=latent_dim
         )
         self.decoder = DisMixDecoder(
@@ -278,6 +276,7 @@ class DisMixModel(nn.Module):
             timbre_dim=latent_dim, 
             gru_hidden_dim=gru_hidden_dim, 
             output_dim=output_dim, 
+            num_frames=num_frames,
             num_layers=2
         )
         
@@ -286,61 +285,26 @@ class DisMixModel(nn.Module):
         # Encode mixture and query
         em = self.mixture_encoder(mixture)
         eq = self.query_encoder(query)
-        
+
         # Encode pitch and timbre latents
         pitch_latent, pitch_logits = self.pitch_encoder(em, eq)
-        timbre_mean, timbre_logvar = self.timbre_encoder(em, eq)
-        
-        # pitch_latent, pitch_logits = self.pitch_encoder(mixture)
-        # _, timbre_mean, timbre_logvar = self.timbre_encoder(query)
-        
-        # Reparameterize to get timbre latent
-        timbre_latent = reparameterize(timbre_mean, timbre_logvar)
+        timbre_latent, timbre_mean, timbre_logvar = self.timbre_encoder(em, eq)
         
         # Decode to reconstruct the mixture
         reconstructed_spectrogram = self.decoder(pitch_latent, timbre_latent)
-        return reconstructed_spectrogram, pitch_latent, pitch_logits, timbre_mean, timbre_logvar
+        return reconstructed_spectrogram, pitch_latent, pitch_logits, timbre_latent, timbre_mean, timbre_logvar
 
 
 
 if __name__ == "__main__":
     # Example usage
     batch_size = 8
-    time_steps = 100
-    input_dim = 128
-    
+    em = torch.randn(batch_size, 64)  # Example mixture encoder output
+    eq = torch.randn(batch_size, 64)  # Example query encoder output
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    
-    mixture = torch.randn(batch_size, time_steps, input_dim).to(device)
-    query = torch.randn(batch_size, time_steps, input_dim).to(device)
-    
-    # Models and other settings
-    model = DisMixModel().to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.0004)
-    
-    # Loss function
-    elbo_loss_fn = ELBOLoss(lambda_recon=1.0, lambda_kl=0.1) # For ELBO
-    bce_loss_fn = nn.BCEWithLogitsLoss()  # For pitch supervision
-    bt_loss_fn = BarlowTwinsLoss(lambda_off_diag=0.0051) # Barlow Twins
+    model = TimbreEncoder()
+    timbre_embedding, mean, logvar = model(em, eq)
 
-    rec_mixture, pitch_latents, pitch_logits, timbre_mean, timbre_logvar = model(mixture, query)
-    print(rec_mixture.shape, mixture.shape, pitch_latents.shape, timbre_mean.shape, timbre_logvar.shape)
-    
-    # Loss
-    # Pitch labels represents Ground-truth pitch labels
-    elbo_loss = elbo_loss_fn(
-        rec_mixture, mixture, 
-        timbre_mean, timbre_logvar, 
-        pitch_logits, pitch_labels
-    )
-    bce_loss = bce_loss_fn(pitch_latents, ground_truth_pitch)
-    bt_loss = bt_loss_fn(timbre_mean, query)
-    
-    loss = elbo_loss + bce_loss - bt_loss
-    loss.backward()
-    optimizer.step()
-    
-    print(loss.item())
-    # print(f"Epoch {epoch} Loss: {loss.item()}")
+    print("Timbre Embedding:", timbre_embedding.shape)  # Should be [batch_size, 64]
+    print("Mean:", mean.shape)  # Should be [batch_size, 64]
+    print("Log Variance:", logvar.shape)  # Should be [batch_size, 64]
