@@ -4,6 +4,7 @@ buffett_reproduce/beats/pt_dict/
 buffett_reproduce/mamba/
 notebooks/beats/pt_dict/
 buffett_reproduce/dismix/wandb/
+buffett_reproduce/dismix/best_model.pth
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
