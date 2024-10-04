@@ -59,15 +59,15 @@ class CocoChoralesTinyDataset(Dataset):
     
     def _load_folder_list(self, data_dir):
         file_list = []
-        if os.path.exists('file_list.pkl'):
-            with open('file_list.pkl', 'rb') as file:
+        if os.path.exists(f'{self.split}_file_list.pkl'):
+            with open(f'{self.split}_file_list.pkl', 'rb') as file:
                 file_list = pickle.load(file)
         else:
             for f in tqdm(os.listdir(data_dir)):
                 for stem in os.listdir(os.path.join(data_dir, f, "stems_audio")):
                     file_list.append(os.path.join(data_dir, f, "stems_audio", stem))
 
-            with open('file_list.pkl', 'wb') as file:
+            with open(f'{self.split}_file_list.pkl', 'wb') as file:
                 pickle.dump(file_list, file)
                 
         return file_list
@@ -275,14 +275,16 @@ class CocoChoralesTinyDataset(Dataset):
 
 if __name__ == "__main__":
     # Usage Example
-    data_dir = '/home/buffett/NAS_189/cocochorales_output/main_dataset/'
-    dataset = CocoChoralesTinyDataset(data_dir, split='train')
-    data_loader = DataLoader(dataset, batch_size=16, shuffle=True)
+    data_dir = '/mnt/gestalt/home/ddmanddman/cocochorales_output/main_dataset' #'/home/buffett/NAS_189/cocochorales_output/main_dataset/'
+    CocoChoralesTinyDataset(data_dir, split='train')
+    CocoChoralesTinyDataset(data_dir, split='valid')
+    CocoChoralesTinyDataset(data_dir, split='test')
+    # data_loader = DataLoader(dataset, batch_size=16, shuffle=True)
 
-    # Iterate over data_loader
-    for batch in data_loader:
-        print(batch["mixture"].shape, batch["query"].shape, 
-              batch["pitch_label"].shape,  batch["pitch_annotation"].shape)
-        break
+    # # Iterate over data_loader
+    # for batch in data_loader:
+    #     print(batch["mixture"].shape, batch["query"].shape, 
+    #           batch["pitch_label"].shape,  batch["pitch_annotation"].shape)
+    #     break
     
  
