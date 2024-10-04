@@ -48,25 +48,33 @@ class BarlowTwinsLoss(nn.Module):
         Returns:
             loss (torch.Tensor): Barlow Twins loss.
         """
-        # Normalize the representations along the batch dimension
-        z1_norm = (z1 - z1.mean(0)) / z1.std(0)
-        z2_norm = (z2 - z2.mean(0)) / z2.std(0)
+        # Normalize the representations along the batch dimension, adding epsilon to prevent division by zero
+        z1_norm = (z1 - z1.mean(dim=0)) / (z1.std(dim=0) + 1e-9)
+        z2_norm = (z2 - z2.mean(dim=0)) / (z2.std(dim=0) + 1e-9)
 
         # Compute the cross-correlation matrix
         batch_size, latent_dim = z1.shape
         c = torch.matmul(z1_norm.T, z2_norm) / batch_size
 
         # Compute the Barlow Twins loss
-        on_diag = torch.diagonal(c).add_(-1).pow(2).sum()
-        off_diag = self.off_diagonal(c).pow(2).sum()
+        on_diag = torch.diagonal(c).add_(-1).pow(2).sum()  # Loss on the diagonal
+        off_diag = self.off_diagonal(c).pow(2).sum()  # Loss on the off-diagonal
 
         loss = on_diag + self.lambda_param * off_diag
         return loss
 
     def off_diagonal(self, x):
-        # Return the off-diagonal elements of a square matrix
+        """
+        Returns the off-diagonal elements of a square matrix.
+        
+        Args:
+            x (torch.Tensor): Square matrix of shape [n, n].
+        
+        Returns:
+            torch.Tensor: Flattened tensor of off-diagonal elements.
+        """
         n, m = x.shape
-        assert n == m
+        assert n == m, "Input matrix must be square"
         return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
 

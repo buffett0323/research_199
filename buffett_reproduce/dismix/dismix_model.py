@@ -292,7 +292,7 @@ class DisMixModel(nn.Module):
         
         # Decode to reconstruct the mixture
         reconstructed_spectrogram = self.decoder(pitch_latent, timbre_latent)
-        return reconstructed_spectrogram, pitch_latent, pitch_logits, timbre_latent, timbre_mean, timbre_logvar
+        return reconstructed_spectrogram, pitch_latent, pitch_logits, timbre_latent, timbre_mean, timbre_logvar, eq
 
 
 

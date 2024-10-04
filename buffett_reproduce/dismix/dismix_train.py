@@ -57,7 +57,7 @@ bce_loss_fn = nn.BCEWithLogitsLoss()  # For pitch supervision
 bt_loss_fn = BarlowTwinsLoss(lambda_param=0.005) # Barlow Twins
 
 # Log model and hyperparameters in wandb
-wandb.watch(model, log="all", log_freq=100)
+wandb.watch(model, log="all", log_freq=10)
 
 # Training
 for step in tqdm(range(max_steps)):
@@ -65,12 +65,17 @@ for step in tqdm(range(max_steps)):
     optimizer.zero_grad()
     
     # Call next() on the iterator
-    batch = next(train_data_loader_iter)
+    try:
+        batch = next(train_data_loader_iter)
+    except StopIteration:
+        train_data_loader_iter = iter(train_data_loader)  # Reset iterator
+        batch = next(train_data_loader_iter)
+        
     mixture = batch["mixture"].to(device)
     query = batch["query"].to(device)
     pitch_annotation = batch["pitch_annotation"].to(device) # pitch_label = batch["pitch_label"].to(device)
         
-    rec_mixture, pitch_latent, pitch_logits, timbre_latent, timbre_mean, timbre_logvar = model(mixture, query)
+    rec_mixture, pitch_latent, pitch_logits, timbre_latent, timbre_mean, timbre_logvar, eq = model(mixture, query)
     
     # Loss
     elbo_loss = elbo_loss_fn(
@@ -78,12 +83,18 @@ for step in tqdm(range(max_steps)):
         timbre_mean, timbre_logvar
     )
     bce_loss = bce_loss_fn(pitch_logits, pitch_annotation)
-    bt_loss = bt_loss_fn(pitch_latent, timbre_latent) # Finish
+    bt_loss = bt_loss_fn(eq, timbre_latent)
     
-    loss = elbo_loss - bce_loss - bt_loss
+    # Check if any loss becomes NaN
+    if torch.isnan(elbo_loss) or torch.isnan(bce_loss) or torch.isnan(bt_loss):
+        print(f"NaN detected at step {step}: elbo_loss={elbo_loss.item()}, bce_loss={bce_loss.item()}, bt_loss={bt_loss.item()}")
+        break  # Exit the training loop if NaN is encountered
+
+    loss = elbo_loss + bce_loss + bt_loss
+    print("ELBO:", elbo_loss.item(), "BCE:", bce_loss.item(), "BT:", bt_loss.item())
     
     loss.backward()
-    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
+    # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
     
     optimizer.step()
     
@@ -96,7 +107,7 @@ for step in tqdm(range(max_steps)):
     })
 
     # Every few steps, evaluate on the validation set
-    if step % 1000 == 0:  # Evaluate every 1000 steps (you can adjust this)
+    if step % 1000 == 0:  # Evaluate every 1000 steps
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
@@ -109,7 +120,7 @@ for step in tqdm(range(max_steps)):
                 query = batch["query"].to(device)
                 pitch_annotation = batch["pitch_annotation"].to(device) # pitch_label = batch["pitch_label"].to(device)
                     
-                rec_mixture, pitch_latent, pitch_logits, timbre_latent, timbre_mean, timbre_logvar = model(mixture, query)
+                rec_mixture, pitch_latent, pitch_logits, timbre_latent, timbre_mean, timbre_logvar, eq = model(mixture, query)
                 
                 # Loss
                 elbo_loss = elbo_loss_fn(
@@ -117,7 +128,7 @@ for step in tqdm(range(max_steps)):
                     timbre_mean, timbre_logvar
                 )
                 bce_loss = bce_loss_fn(pitch_logits, pitch_annotation)
-                bt_loss = bt_loss_fn(pitch_latent, timbre_latent) # Finish
+                bt_loss = bt_loss_fn(eq, timbre_latent)
                 
                 loss = elbo_loss - bce_loss - bt_loss
                 val_loss += loss.item()
