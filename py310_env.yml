@@ -26,11 +26,13 @@ dependencies:
   - exceptiongroup=1.2.2=pyhd8ed1ab_0
   - executing=2.0.1=pyhd8ed1ab_0
   - ffmpeg=4.3=hf484d3e_0
+  - filelock=3.15.4=pyhd8ed1ab_0
   - freetype=2.12.1=h4a9f257_0
   - gmp=6.2.1=h295c915_3
   - gmpy2=2.1.2=py310heeb90bb_0
   - gnutls=3.6.15=he1e5248_0
   - idna=3.7=py310h06a4308_0
+  - importlib-metadata=8.4.0=pyha770c72_0
   - importlib_metadata=8.4.0=hd8ed1ab_0
   - intel-openmp=2023.1.0=hdb19cb5_46306
   - ipykernel=6.29.5=pyh3099207_0
@@ -82,10 +84,11 @@ dependencies:
   - nest-asyncio=1.6.0=pyhd8ed1ab_0
   - nettle=3.7.3=hbbd107a_1
   - networkx=3.3=py310h06a4308_0
+  - numpy=1.26.4=py310h5f9d8c6_0
+  - numpy-base=1.26.4=py310hb5e798b_0
   - openh264=2.1.1=h4ff587b_0
   - openjpeg=2.5.2=he7f1fd0_0
   - openssl=3.3.1=h4bc722e_2
-  - packaging=24.1=pyhd8ed1ab_0
   - parso=0.8.4=pyhd8ed1ab_0
   - pexpect=4.9.0=pyhd8ed1ab_0
   - pickleshare=0.7.5=py_1003
@@ -99,6 +102,7 @@ dependencies:
   - pygments=2.18.0=pyhd8ed1ab_0
   - pysocks=1.7.1=py310h06a4308_0
   - python=3.10.14=h955ad1f_1
+  - python-dateutil=2.9.0=pyhd8ed1ab_0
   - python_abi=3.10=2_cp310
   - pytorch=2.4.0=py3.10_cuda11.8_cudnn9.1.0_0
   - pytorch-cuda=11.8=h7e8668a_5
@@ -130,132 +134,115 @@ dependencies:
   - zlib=1.2.13=h5eee18b_1
   - zstd=1.5.5=hc292b87_2
   - pip:
-      - absl-py==2.1.0
       - aiohappyeyeballs==2.4.0
-      - aiohttp==3.10.4
+      - aiohttp==3.10.5
       - aiosignal==1.3.1
       - annotated-types==0.7.0
       - antlr4-python3-runtime==4.9.3
-      - asteroid-filterbanks==0.4.0
       - async-timeout==4.0.3
       - attrs==24.2.0
       - audioread==3.0.1
       - beautifulsoup4==4.12.3
+      - blis==0.7.11
       - cachetools==5.5.0
-      - cffi==1.17.0
-      - ci-sdr==0.0.2
+      - catalogue==2.0.10
+      - cffi==1.17.1
       - click==8.1.7
-      - configargparse==1.7
-      - contourpy==1.2.1
-      - ctc-segmentation==1.7.4
+      - cloudpathlib==0.19.0
+      - confection==0.1.5
+      - contourpy==1.3.0
       - cycler==0.12.1
+      - cymem==2.0.8
       - cython==3.0.11
-      - distance==0.1.3
       - docker-pycreds==0.4.0
-      - editdistance==0.8.1
-      - einops==0.8.0
-      - espnet==202402
-      - espnet-tts-frontend==0.0.3
-      - fast-bss-eval==0.1.3
-      - filelock==3.15.4
-      - fire==0.6.0
+      - en-core-web-sm==3.7.1
+      - ffmpeg-python==0.2.0
       - fonttools==4.53.1
       - frozenlist==1.4.1
-      - fsspec==2024.6.1
+      - fsspec==2024.2.0
       - future==1.0.0
-      - g2p-en==2.1.0
+      - fvcore==0.1.5.post20221221
       - gdown==5.2.0
       - gitdb==4.0.11
       - gitpython==3.1.43
-      - grpcio==1.65.5
-      - h11==0.14.0
-      - h5py==3.11.0
       - hear21passt==0.0.26
       - huggingface-hub==0.24.6
-      - humanfriendly==10.0
-      - hydra-core==1.3.2
-      - importlib-metadata==4.13.0
-      - inflect==7.0.0
-      - jaconv==0.4.0
-      - jamo==0.4.1
+      - iniconfig==2.0.0
+      - iopath==0.1.10
       - joblib==1.4.2
       - julius==0.2.7
-      - kaldiio==2.18.0
-      - kiwisolver==1.4.5
+      - kiwisolver==1.4.7
+      - langcodes==3.4.0
+      - language-data==1.2.0
       - lazy-loader==0.4
-      - librosa==0.9.2
-      - lightning-utilities==0.11.6
+      - librosa==0.10.2.post1
+      - lightning-utilities==0.11.7
       - llvmlite==0.43.0
-      - markdown==3.7
+      - marisa-trie==1.2.0
       - markdown-it-py==3.0.0
       - matplotlib==3.9.2
       - mdurl==0.1.2
+      - mido==1.3.2
       - mir-eval==0.7
       - msgpack==1.0.8
       - multidict==6.0.5
-      - ninja==1.11.1.1
-      - nltk==3.9.1
+      - murmurhash==1.0.10
+      - musdb==0.4.2
       - numba==0.60.0
-      - numpy==1.23.5
       - nvidia-ml-py==12.535.161
       - nvitop==1.3.2
       - omegaconf==2.3.0
-      - opt-einsum==3.3.0
-      - outcome==1.3.0.post0
+      - packaging==23.2
       - pandas==2.2.2
+      - plac==1.1.3
+      - pluggy==1.5.0
       - pooch==1.8.2
+      - portalocker==2.10.1
+      - preshed==3.0.9
+      - pretty-midi==0.2.10
       - primepy==1.3
-      - protobuf==5.27.3
+      - protobuf==5.28.0
+      - pyaml==24.7.0
       - pycparser==2.22
-      - pydantic==2.8.2
-      - pydantic-core==2.20.1
-      - pyparsing==3.1.2
-      - pypinyin==0.44.0
-      - python-dateutil==2.9.0.post0
+      - pydantic==2.9.2
+      - pydantic-core==2.23.4
+      - pyparsing==3.1.4
+      - pytest==8.3.3
       - pytorch-lightning==2.4.0
       - pytz==2024.1
-      - pyworld==0.3.4
-      - regex==2024.7.24
-      - resampy==0.4.3
-      - resemblyzer==0.1.4
-      - rich==13.7.1
-      - safetensors==0.4.4
+      - rich==13.8.1
+      - safetensors==0.4.5
       - scikit-learn==1.5.1
-      - scipy==1.14.0
-      - seaborn==0.13.2
-      - selenium==4.23.1
-      - sentencepiece==0.1.97
+      - scipy==1.14.1
       - sentry-sdk==2.13.0
       - setproctitle==1.3.3
+      - shellingham==1.5.4
+      - smart-open==7.0.4
       - smmap==5.0.1
-      - sniffio==1.3.1
-      - sortedcontainers==2.4.0
       - soundfile==0.12.1
       - soupsieve==2.6
-      - soxr==0.4.0
-      - tensorboard==2.17.1
-      - tensorboard-data-server==0.7.2
-      - tensorboardx==2.6.2.2
+      - soxr==0.5.0.post1
+      - spacy==3.7.6
+      - spacy-legacy==3.0.12
+      - spacy-loggers==1.0.5
+      - srsly==2.4.3
+      - stempeg==0.2.3
+      - tabulate==0.9.0
       - termcolor==2.4.0
+      - thinc==8.2.5
       - threadpoolctl==3.5.0
-      - timm==1.0.8
-      - tokenizers==0.19.1
+      - timm==1.0.9
+      - tomli==2.0.1
       - torch-audiomentations==0.11.1
-      - torch-complex==0.4.4
       - torch-pitch-shift==1.2.4
       - torchmetrics==1.4.1
       - tqdm==4.66.5
-      - transformers==4.44.1
-      - trio==0.26.2
-      - trio-websocket==0.11.1
-      - typeguard==2.13.3
-      - typing==3.7.4.3
+      - typer==0.12.5
       - tzdata==2024.1
-      - unidecode==1.3.8
       - wandb==0.17.9
-      - webrtcvad==2.0.10
-      - websocket-client==1.8.0
-      - werkzeug==3.0.3
-      - wsproto==1.2.0
-      - yarl==1.9.4
+      - wasabi==0.10.1
+      - weasel==0.4.1
+      - wrapt==1.16.0
+      - yacs==0.1.8
+      - yarl==1.10.0
 prefix: /home/buffett/miniconda3/envs/py310
