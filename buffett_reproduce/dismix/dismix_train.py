@@ -27,7 +27,7 @@ np_improvement_steps = 0
 max_steps = 10000000
 
 # Usage Example
-data_dir = '/mnt/gestalt/home/ddmanddman/cocochorales_output/main_dataset' #'/home/buffett/NAS_189/cocochorales_output/main_dataset/'
+data_dir = '/home/buffett/NAS_189/cocochorales_output/main_dataset/'
 train_dataset = CocoChoralesTinyDataset(data_dir, split='train')
 train_data_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 train_data_loader_iter = iter(train_data_loader)
@@ -52,9 +52,9 @@ model = DisMixModel(
 optimizer = optim.Adam(model.parameters(), lr=lr)
 
 # Loss function
-elbo_loss_fn = ELBOLoss(beta=1.0) # For ELBO
+elbo_loss_fn = ELBOLoss() # For ELBO
 bce_loss_fn = nn.BCEWithLogitsLoss()  # For pitch supervision
-bt_loss_fn = BarlowTwinsLoss(lambda_param=0.005) # Barlow Twins
+bt_loss_fn = BarlowTwinsLoss() # Barlow Twins
 
 # Log model and hyperparameters in wandb
 wandb.watch(model, log="all", log_freq=10)
@@ -79,8 +79,9 @@ for step in tqdm(range(max_steps)):
     
     # Loss
     elbo_loss = elbo_loss_fn(
-        mixture, rec_mixture, # pitch_mean, pitch_logvar, 
-        timbre_mean, timbre_logvar
+        mixture, rec_mixture,
+        timbre_mean, timbre_logvar,
+        pitch_logits, pitch_annotation,
     )
     bce_loss = bce_loss_fn(pitch_logits, pitch_annotation)
     bt_loss = bt_loss_fn(eq, timbre_latent)
@@ -94,7 +95,7 @@ for step in tqdm(range(max_steps)):
     print("ELBO:", elbo_loss.item(), "BCE:", bce_loss.item(), "BT:", bt_loss.item())
     
     loss.backward()
-    # torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
+    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_value)
     
     optimizer.step()
     
@@ -107,15 +108,14 @@ for step in tqdm(range(max_steps)):
     })
 
     # Every few steps, evaluate on the validation set
-    if step % 1000 == 0:  # Evaluate every 1000 steps
+    if step % 1000 == 0 and step > 100:  # Evaluate every 1000 steps
         model.eval()
         val_loss = 0.0
         with torch.no_grad():
             cnt = 0
             for batch in valid_data_loader:
                 cnt += 1
-                if cnt > 10: break
-                
+                if cnt >= 100: break
                 mixture = batch["mixture"].to(device)
                 query = batch["query"].to(device)
                 pitch_annotation = batch["pitch_annotation"].to(device) # pitch_label = batch["pitch_label"].to(device)
@@ -124,8 +124,9 @@ for step in tqdm(range(max_steps)):
                 
                 # Loss
                 elbo_loss = elbo_loss_fn(
-                    mixture, rec_mixture, # pitch_mean, pitch_logvar, 
-                    timbre_mean, timbre_logvar
+                    mixture, rec_mixture,
+                    timbre_mean, timbre_logvar,
+                    pitch_logits, pitch_annotation,
                 )
                 bce_loss = bce_loss_fn(pitch_logits, pitch_annotation)
                 bt_loss = bt_loss_fn(eq, timbre_latent)
@@ -151,9 +152,32 @@ for step in tqdm(range(max_steps)):
         if no_improvement_steps >= early_stop_patience:
             print(f"Early stopping triggered after {step} steps with best validation loss: {best_val_loss}")
             break
-
-    # Optionally, save model checkpoints here
         
+
+# Testing
+model.eval()
+test_loss = 0.0
+with torch.no_grad():
+    for batch in test_data_loader:
+        mixture = batch["mixture"].to(device)
+        query = batch["query"].to(device)
+        pitch_annotation = batch["pitch_annotation"].to(device) # pitch_label = batch["pitch_label"].to(device)
+            
+        rec_mixture, pitch_latent, pitch_logits, timbre_latent, timbre_mean, timbre_logvar, eq = model(mixture, query)
+        
+        # Loss
+        elbo_loss = elbo_loss_fn(
+            mixture, rec_mixture, # pitch_mean, pitch_logvar, 
+            timbre_mean, timbre_logvar
+        )
+        bce_loss = bce_loss_fn(pitch_logits, pitch_annotation)
+        bt_loss = bt_loss_fn(eq, timbre_latent)
+        
+        loss = elbo_loss - bce_loss - bt_loss
+        test_loss += loss.item()
+
+# Log test loss to wandb
+wandb.log({"test_loss": test_loss})
 wandb.finish()
 
 

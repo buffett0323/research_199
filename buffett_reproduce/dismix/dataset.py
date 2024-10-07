@@ -261,13 +261,14 @@ class CocoChoralesTinyDataset(Dataset):
         # Load pitch annotations for the corresponding segment
         midi_path = query_path.replace(".wav", ".mid").replace("stems_audio", "stems_midi")  # Assuming corresponding MIDI path
         pitch_label, pitch_annotation = self._extract_pitch_annotations(midi_path, start_time, end_time)
+        stem = midi_path.split('/')[-1].split('.mid')[0]
         
-        # print(pitch_annotation.shape)
         return {
             'mixture': mixture,         # Mixture mel spectrogram
             'query': query,             # Query mel spectrogram
             'pitch_label': torch.tensor(pitch_label), # Ground-truth pitch label for the segment
             'pitch_annotation': torch.tensor(pitch_annotation), 
+            'stem': stem,
         }
 
 
@@ -275,16 +276,10 @@ class CocoChoralesTinyDataset(Dataset):
 
 if __name__ == "__main__":
     # Usage Example
-    data_dir = '/mnt/gestalt/home/ddmanddman/cocochorales_output/main_dataset' #'/home/buffett/NAS_189/cocochorales_output/main_dataset/'
-    CocoChoralesTinyDataset(data_dir, split='train')
-    CocoChoralesTinyDataset(data_dir, split='valid')
-    CocoChoralesTinyDataset(data_dir, split='test')
-    # data_loader = DataLoader(dataset, batch_size=16, shuffle=True)
+    data_dir = '/home/buffett/NAS_189/cocochorales_output/main_dataset/'
+    CocoChoralesTinyDataset(data_dir, split='train')[0]
+    # CocoChoralesTinyDataset(data_dir, split='valid')
+    # CocoChoralesTinyDataset(data_dir, split='test')
 
-    # # Iterate over data_loader
-    # for batch in data_loader:
-    #     print(batch["mixture"].shape, batch["query"].shape, 
-    #           batch["pitch_label"].shape,  batch["pitch_annotation"].shape)
-    #     break
     
  
