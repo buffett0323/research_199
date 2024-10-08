@@ -27,7 +27,7 @@ np_improvement_steps = 0
 max_steps = 10000000
 
 # Usage Example
-data_dir = '/home/buffett/NAS_189/cocochorales_output/main_dataset/'
+data_dir = '/home/buffett/NAS_189/cocochorales_full_v1_output/main_dataset/'
 train_dataset = CocoChoralesTinyDataset(data_dir, split='train')
 train_data_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 train_data_loader_iter = iter(train_data_loader)

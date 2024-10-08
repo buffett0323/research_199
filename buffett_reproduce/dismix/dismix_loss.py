@@ -82,7 +82,7 @@ class ELBOLoss(nn.Module):
     
 
 class BarlowTwinsLoss(nn.Module):
-    def __init__(self, lambda_param=0.005):
+    def __init__(self, lambda_param=0.0051):
         super(BarlowTwinsLoss, self).__init__()
         self.lambda_param = lambda_param
 
@@ -103,7 +103,7 @@ class BarlowTwinsLoss(nn.Module):
 
     #     # Compute the cross-correlation matrix
     #     batch_size, latent_dim = z1.shape
-    #     c = torch.matmul(z1_norm.T, z2_norm) / batch_size
+    #     c = torch.mm(z1_norm.T, z2_norm) / batch_size
 
     #     # Compute the Barlow Twins loss
     #     on_diag = torch.diagonal(c).add_(-1).pow(2).sum()  # Loss on the diagonal

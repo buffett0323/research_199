@@ -225,6 +225,7 @@ class MyModel(nn.Module):
             Z = self.beats_query(batch.query.audio)
         elif self.q_enc == "Passt":
             Z = self.passt(batch.query.audio)
+            # print("query shape::", batch.query.audio.shape, "Z SHape:", Z.shape)
 
         """
             Ways to Combine Mixture & Query

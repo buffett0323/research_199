@@ -37,9 +37,9 @@ from data.moisesdb.datamodule import (
 wandb_use = False # False
 lr = 1e-3 #1e-4
 num_epochs = 500
-batch_size = 16 #4
+batch_size = 2 #4
 config_path = "config/train.yml"
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
 print("Training on device:", device)
 
 

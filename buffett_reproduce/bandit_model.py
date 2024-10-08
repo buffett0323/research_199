@@ -11,7 +11,8 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch.nn import init
 from torch.nn.parameter import Parameter
-
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 from models.e2e.bandit.bandsplit import BandSplitModule
 from models.e2e.bandit.utils import MusicalBandsplitSpecification
@@ -23,8 +24,13 @@ from models.types import InputType, OperationMode, SimpleishNamespace
 from beats.BEATs import BEATs, BEATsConfig
 
 from unet import UnetIquery
+from functools import partial
 from mamba_ssm import Mamba
 from mamba.mamba_ssm.modules.mamba2 import Mamba2
+from mamba.mamba_ssm.modules.mamba_simple import Mamba
+from mamba.mamba_ssm.modules.block import Block
+from mamba.mamba_ssm.models.mixer_seq_simple import _init_weights
+from mamba.mamba_ssm.ops.triton.layer_norm import RMSNorm
 
 
 if hasattr(torch, "bfloat16"):
@@ -325,7 +331,7 @@ class MyBandSplit(BaseEndToEndModule):
         
         return q
     
-
+###------------------------------------------------------------------------------------------###
 
 class BandSplitMamba(BaseEndToEndModule):
     def __init__(
@@ -410,13 +416,13 @@ class BandSplitMamba(BaseEndToEndModule):
         )
         
         
-        self.instantiate_tf_modelling(
-            n_sqm_modules=n_sqm_modules,
-            emb_dim=emb_dim,
-            rnn_dim=rnn_dim,
-            bidirectional=bidirectional,
-            rnn_type=rnn_type,
-        )
+        # self.instantiate_tf_modelling(
+        #     n_sqm_modules=n_sqm_modules,
+        #     emb_dim=emb_dim,
+        #     rnn_dim=rnn_dim,
+        #     bidirectional=bidirectional,
+        #     rnn_type=rnn_type,
+        # )
         
 
         self.instantiate_mask_estim(
@@ -445,6 +451,30 @@ class BandSplitMamba(BaseEndToEndModule):
             depth=film_depth,
         )
 
+        self.instantiate_mamba(
+            emb_dim=64, # 48,
+            eps=1.0e-5,
+            emb_ks=4,
+            emb_hs=1,
+        )
+        
+        
+    def instantiate_mamba(
+        self,
+        emb_dim=64, # 48,
+        eps=1.0e-5,
+        emb_ks=4,
+        emb_hs=1,
+    ):
+        self.emb_ks = emb_ks
+        self.emb_hs = emb_hs
+        in_channels = emb_dim * emb_ks
+
+        self.intra_norm = LayerNormalization4D(emb_dim, eps=eps)
+        self.intra_mamba = MambaBlock(in_channels=emb_dim, n_layer=1, bidirectional=False) # True
+        self.intra_linear = nn.ConvTranspose1d(
+            in_channels * 2, emb_dim, emb_ks, stride=emb_hs
+        )
 
     def instantiate_bandsplit(
         self,
@@ -476,29 +506,6 @@ class BandSplitMamba(BaseEndToEndModule):
             emb_dim=emb_dim,
         )
     
-    
-    
-    def instantiate_tf_modelling(
-        self,
-        n_sqm_modules: int = 12,
-        emb_dim: int = 128,
-        rnn_dim: int = 256,
-        bidirectional: bool = True,
-        rnn_type: str = "LSTM",
-    ):
-        self.tf_model = SeqBandModellingModule(
-            n_modules=n_sqm_modules,
-            emb_dim=emb_dim,
-            rnn_dim=rnn_dim,
-            bidirectional=bidirectional,
-            rnn_type=rnn_type,
-        )
-        # self.tf_model = Mamba(
-        #     d_model=16, # Model dimension d_model
-        #     d_state=16,  # SSM state expansion factor
-        #     d_conv=4,    # Local convolution width
-        #     expand=2,    # Block expansion factor
-        # )
         
         
     def instantiate_mask_estim(
@@ -570,14 +577,13 @@ class BandSplitMamba(BaseEndToEndModule):
     def encode(self, batch):
         x = batch.mixture.spectrogram
         length = batch.mixture.audio.shape[-1]
-        z = self.band_split(x)  # (batch, emb_dim, n_band, n_time)
-        # print(z.shape) # torch.Size([2, 64, 576, 128])
+        z = self.band_split(x)  # (batch, emb_dim, n_band, n_time) # print(z.shape) # torch.Size([BS, 64, 576, 128])
         
         # Mamba Block
-        q = z
-        # q = self.tf_model(z)  # (batch, emb_dim, n_band, n_time): Same size
+        z = self.adapt_mamba(z)
+        # z = self.tf_model(z)  # (batch, emb_dim, n_band, n_time): Same size
 
-        return x, q, length
+        return x, z, length
     
     
     def adapt_query(self, q, batch):
@@ -592,3 +598,115 @@ class BandSplitMamba(BaseEndToEndModule):
         return q
     
 
+    def adapt_mamba(self, x):
+        B, C, n_band, old_time = x.shape
+
+        # No need for padding if Mamba2 can handle arbitrary sequence lengths
+        # Apply normalization
+        input_ = x  # Shape: [B, C, n_band, old_time]
+        intra_rnn = self.intra_norm(input_)  # Shape: [B, C, n_band, old_time]
+
+        # Rearrange the tensor to merge batch and n_band dimensions
+        intra_rnn = intra_rnn.permute(0, 2, 1, 3).contiguous()  # [B, n_band, C, old_time]
+        intra_rnn = intra_rnn.view(B * n_band, C, old_time)  # [B * n_band, C, old_time]
+
+        # Transpose to get the sequence dimension first
+        intra_rnn = intra_rnn.transpose(1, 2)  # [B * n_band, old_time, C]
+
+        # Apply the Mamba block over the time dimension
+        intra_rnn = self.intra_mamba(intra_rnn)  # [B * n_band, old_time, C] ([1152, 128, 64])
+
+        # Transpose back to [B * n_band, C, old_time]
+        intra_rnn = intra_rnn.transpose(1, 2)  # [B * n_band, C, old_time]
+
+        # Reshape back to original dimensions
+        intra_rnn = intra_rnn.view(B, n_band, C, old_time)  # [B, n_band, C, old_time]
+
+        # Permute to get back to [B, C, n_band, old_time]
+        intra_rnn = intra_rnn.permute(0, 2, 1, 3).contiguous()  # [B, C, n_band, old_time]
+
+        # Add the residual connection
+        intra_rnn = intra_rnn + input_  # [B, C, n_band, old_time]
+
+        return intra_rnn
+
+    
+    
+    
+class MambaBlock(nn.Module):
+    def __init__(self, in_channels, n_layer=1, bidirectional=False):
+        super(MambaBlock, self).__init__()
+        self.forward_blocks = nn.ModuleList()
+        for i in range(n_layer):
+            self.forward_blocks.append(
+                Block(
+                    dim=in_channels,
+                    mixer_cls=partial(Mamba, layer_idx=i, d_state=16, d_conv=4, expand=4),
+                    mlp_cls=nn.Identity,  # Assuming no additional MLP layer
+                    norm_cls=partial(RMSNorm, eps=1e-5),
+                    fused_add_norm=False,
+                )
+            )
+        if bidirectional:
+            self.backward_blocks = nn.ModuleList()
+            for i in range(n_layer):
+                self.backward_blocks.append(
+                    Block(
+                        dim=in_channels,
+                        mixer_cls=partial(Mamba, layer_idx=i, d_state=16, d_conv=4, expand=4),
+                        mlp_cls=nn.Identity,
+                        norm_cls=partial(RMSNorm, eps=1e-5),
+                        fused_add_norm=False,
+                    )
+                )
+        else:
+            self.backward_blocks = None
+
+        self.apply(partial(_init_weights, n_layer=n_layer))
+
+
+
+    def forward(self, input):
+        # Forward pass through the forward_blocks
+        residual = None
+        forward_f = input
+        for block in self.forward_blocks:
+            forward_f, residual = block(forward_f, residual, inference_params=None)
+        output = forward_f  # The residual is handled within the Block class
+
+        # If bidirectional, process the sequence in reverse
+        if self.backward_blocks is not None:
+            backward_f = torch.flip(input, dims=[1])  # Flip along the time dimension
+            back_residual = None
+            for block in self.backward_blocks:
+                backward_f, back_residual = block(backward_f, back_residual, inference_params=None)
+            back_output = backward_f
+            back_output = torch.flip(back_output, dims=[1])
+            output = torch.cat([output, back_output], dim=-1)  # Concatenate along the feature dimension
+
+        return output
+    
+    
+    
+class LayerNormalization4D(nn.Module):
+    def __init__(self, input_dimension, eps=1e-5):
+        super().__init__()
+        param_size = [1, input_dimension, 1, 1]
+        self.gamma = Parameter(torch.Tensor(*param_size).to(torch.float32))
+        self.beta = Parameter(torch.Tensor(*param_size).to(torch.float32))
+        init.ones_(self.gamma)
+        init.zeros_(self.beta)
+        self.eps = eps
+
+    def forward(self, x):
+        if x.ndim == 4:
+            _, C, _, _ = x.shape
+            stat_dim = (1,)
+        else:
+            raise ValueError("Expect x to have 4 dimensions, but got {}".format(x.ndim))
+        mu_ = x.mean(dim=stat_dim, keepdim=True)  # [B,1,T,F]
+        std_ = torch.sqrt(
+            x.var(dim=stat_dim, unbiased=False, keepdim=True) + self.eps
+        )  # [B,1,T,F]
+        x_hat = ((x - mu_) / std_) * self.gamma + self.beta
+        return x_hat
