@@ -98,9 +98,7 @@ class ResMamba(nn.Module):
     def forward(self, input):
         # input shape: batch, dim, seq
         rnn_output =  self.rnn(self.dropout(self.norm(input)).transpose(1, 2).contiguous())
-        rnn_output = self.proj(rnn_output.contiguous().view(-1, rnn_output.shape[2])).view(input.shape[0],
-                                                                                           input.shape[2],
-                                                                                           input.shape[1])
+        rnn_output = self.proj(rnn_output.contiguous().view(-1, rnn_output.shape[2])).view(input.shape[0], input.shape[2], input.shape[1])
 
         return input + rnn_output.transpose(1, 2).contiguous()
 
@@ -132,32 +130,7 @@ class BSNet(nn.Module):
         return output.view(B, nch, N, T)
     
     
-class BSNet(nn.Module):
-    def __init__(self, in_channel, nband=7):
-        super(BSNet, self).__init__()
 
-        self.nband = nband
-        self.feature_dim = in_channel // nband
-
-        self.band_rnn = ResMamba(self.feature_dim, self.feature_dim*2)
-        self.band_comm = ResMamba(self.feature_dim, self.feature_dim*2)
-        self.channel_comm = TAC(self.feature_dim, self.feature_dim*3)
-
-    def forward(self, input):
-        # input shape: B, nch, nband*N, T
-        B, nch, N, T = input.shape
-
-        band_output = self.band_rnn(input.view(B*nch*self.nband, self.feature_dim, -1)).view(B*nch, self.nband, -1, T)
-
-        # band comm
-        band_output = band_output.permute(0,3,2,1).contiguous().view(B*nch*T, -1, self.nband)
-        output = self.band_comm(band_output).view(B*nch, T, -1, self.nband).permute(0,3,2,1).contiguous()
-
-        # channel comm
-        output = output.view(B, nch, self.nband, -1, T).transpose(1,2).contiguous().view(B*self.nband, nch, -1, T)
-        output = self.channel_comm(output).view(B, self.nband, nch, -1, T).transpose(1,2).contiguous()
-
-        return output.view(B, nch, N, T)
 
     
 class Separator(nn.Module):
@@ -166,9 +139,9 @@ class Separator(nn.Module):
         sr=44100, 
         win=2048, 
         stride=512, 
-        feature_dim=128, 
-        num_repeat_mask=8, 
-        num_repeat_map=4, 
+        feature_dim=128, # N
+        num_repeat_mask=4, #8, 
+        num_repeat_map=2, #4, 
         num_output=4
     ):
         super(Separator, self).__init__()
@@ -179,7 +152,7 @@ class Separator(nn.Module):
         self.group = self.win // 2
         self.enc_dim = self.win // 2 + 1
         self.feature_dim = feature_dim
-        self.num_output = num_output
+        # self.num_output = num_output
         self.eps = torch.finfo(torch.float32).eps
         
         # 0-1k (50 hop), 1k-2k (100 hop), 2k-4k (250 hop), 4k-8k (500 hop), 8k-16k (1k hop), 16k-20k (2k hop), 20k-inf
@@ -197,8 +170,6 @@ class Separator(nn.Module):
         self.band_width += [bandwidth_2k]*2
         self.band_width.append(self.enc_dim - np.sum(self.band_width))
         self.nband = len(self.band_width)
-        # print(self.nband)
-        # print(self.band_width)
         
         self.BN_mask = nn.ModuleList([])
         for i in range(self.nband):
@@ -212,8 +183,8 @@ class Separator(nn.Module):
         for i in range(self.nband):
             self.BN_map.append(
                 nn.Sequential(
-                    nn.GroupNorm(1, self.band_width[i] * 2, self.eps),
-                    nn.Conv1d(self.band_width[i] * 2, self.feature_dim, 1)
+                    nn.GroupNorm(1, self.band_width[i]*2, self.eps),
+                    nn.Conv1d(self.band_width[i]*2, self.feature_dim, 1)
                 )
             )
 
@@ -253,21 +224,32 @@ class Separator(nn.Module):
         subband_feature_mask = []
         for i in range(len(self.band_width)):
             subband_feature_mask.append(self.BN_mask[i](subband_spec_RI[i].view(batch_size*nch, self.band_width[i]*2, -1)))
-        subband_feature_mask = torch.stack(subband_feature_mask, 1)  # B, nband, N, T
+        subband_feature_mask = torch.stack(subband_feature_mask, 1)  # B, nband, N, T -> torch.Size([2, 57, 128, 87])
          
         subband_feature_map = []
         for i in range(len(self.band_width)):
-             subband_feature_map.append(self.BN_map[i](subband_spec_RI[i].view(batch_size * nch, self.band_width[i] * 2, -1)))
-        subband_feature_map = torch.stack(subband_feature_map, 1)  # B, nband, N, T
+             subband_feature_map.append(self.BN_map[i](subband_spec_RI[i].view(batch_size*nch, self.band_width[i] * 2, -1)))
+        subband_feature_map = torch.stack(subband_feature_map, 1)  # B, nband, N, T -> torch.Size([2, 57, 128, 87])
         
         # separator
-        sep_output = checkpoint_sequential(self.separator_mask, 2, subband_feature_mask.view(batch_size, nch, self.nband*self.feature_dim, -1))  # B, nband*N, T
+        sep_output = checkpoint_sequential(self.separator_mask, 2, subband_feature_mask.view(batch_size, nch, self.nband*self.feature_dim, -1), use_reentrant=False)  # B, nband*N, T
         sep_output = sep_output.view(batch_size*nch, self.nband, self.feature_dim, -1)
+        
+        combined = torch.cat((subband_feature_map, sep_output), dim=2)
+        combined = combined.reshape(batch_size * nch * self.nband,self.feature_dim*2,-1)
+        combined = self.Tanh(self.in_conv(combined))
+        combined = combined.reshape(batch_size * nch, self.nband,self.feature_dim,-1)
+        sep_output2 = checkpoint_sequential(self.separator_map, 2, combined.view(batch_size, nch, self.nband*self.feature_dim, -1))  # 1B, nband*N, T
+        sep_output2 = sep_output2.view(batch_size * nch, self.nband, self.feature_dim, -1)
+        
+        
         return sep_output
 
+
+
 if __name__ == "__main__":
-    x = torch.randn(4, 2, 44100)
-    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+    x = torch.randn(1, 2, 44100)
+    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
     x = x.to(device)
     
     model = Separator().to(device)
