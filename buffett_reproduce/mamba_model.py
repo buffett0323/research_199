@@ -152,7 +152,7 @@ class Separator(nn.Module):
         self.group = self.win // 2
         self.enc_dim = self.win // 2 + 1
         self.feature_dim = feature_dim
-        # self.num_output = num_output
+        self.num_output = num_output
         self.eps = torch.finfo(torch.float32).eps
         
         # 0-1k (50 hop), 1k-2k (100 hop), 2k-4k (250 hop), 4k-8k (500 hop), 8k-16k (1k hop), 16k-20k (2k hop), 20k-inf
@@ -198,7 +198,31 @@ class Separator(nn.Module):
             self.separator_map.append(BSNet(self.nband * self.feature_dim, self.nband))
         self.separator_map = nn.Sequential(*self.separator_map)
     
-    
+        self.in_conv = nn.Conv1d(self.feature_dim*2, self.feature_dim, 1)
+        self.Tanh = nn.Tanh()
+        self.mask = nn.ModuleList([])
+        self.map = nn.ModuleList([])
+        for i in range(self.nband):
+            self.mask.append(
+                nn.Sequential(
+                    nn.GroupNorm(1, self.feature_dim, torch.finfo(torch.float32).eps),
+                    nn.Conv1d(self.feature_dim, self.feature_dim*1*self.num_output, 1),
+                    nn.Tanh(),
+                    nn.Conv1d(self.feature_dim*1*self.num_output, self.feature_dim*1*self.num_output, 1, groups=self.num_output),
+                    nn.Tanh(),
+                    nn.Conv1d(self.feature_dim*1*self.num_output, self.band_width[i]*4*self.num_output, 1, groups=self.num_output)
+                    )
+                )
+            self.map.append(
+                nn.Sequential(
+                    nn.GroupNorm(1, self.feature_dim, torch.finfo(torch.float32).eps),
+                    nn.Conv1d(self.feature_dim, self.feature_dim*1*self.num_output, 1),
+                    nn.Tanh(),
+                    nn.Conv1d(self.feature_dim*1*self.num_output, self.feature_dim*1*self.num_output, 1, groups=self.num_output),
+                    nn.Tanh(),
+                    nn.Conv1d(self.feature_dim*1*self.num_output, self.band_width[i]*4*self.num_output, 1, groups=self.num_output)
+                    )
+                )
     
     def forward(self, input):
         
@@ -239,17 +263,17 @@ class Separator(nn.Module):
         combined = combined.reshape(batch_size * nch * self.nband,self.feature_dim*2,-1)
         combined = self.Tanh(self.in_conv(combined))
         combined = combined.reshape(batch_size * nch, self.nband,self.feature_dim,-1)
-        sep_output2 = checkpoint_sequential(self.separator_map, 2, combined.view(batch_size, nch, self.nband*self.feature_dim, -1))  # 1B, nband*N, T
+        sep_output2 = checkpoint_sequential(self.separator_map, 2, combined.view(batch_size, nch, self.nband*self.feature_dim, -1), use_reentrant=False)  # 1B, nband*N, T
         sep_output2 = sep_output2.view(batch_size * nch, self.nband, self.feature_dim, -1)
         
         
-        return sep_output
+        return sep_output2
 
 
 
 if __name__ == "__main__":
     x = torch.randn(1, 2, 44100)
-    device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     x = x.to(device)
     
     model = Separator().to(device)
