@@ -1,335 +1,287 @@
-import math
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-from torch.nn import init
-from torch.nn.parameter import Parameter
-
-
-from mamba_ssm.modules.mamba_simple import Mamba
-from mamba_ssm.modules.block import Block
-from mamba_ssm.models.mixer_seq_simple import _init_weights
-from mamba_ssm.ops.triton.layer_norm import RMSNorm
-from functools import partial
-
+import torch
+import torch.nn as nn
+import numpy as np
+from torch.utils.checkpoint import checkpoint_sequential
+from mamba.mamba_ssm.modules.mamba2 import Mamba2
+from ptflops import get_model_complexity_info
 
 class MambaBlock(nn.Module):
-    def __init__(self, in_channels, n_layer=1, bidirectional=False):
+    def __init__(self, in_channels):
         super(MambaBlock, self).__init__()
-        self.forward_blocks = nn.ModuleList([])
-        for i in range(n_layer):
-            self.forward_blocks.append(
-                Block(
-                    in_channels,
-                    mixer_cls=partial(Mamba, layer_idx=i, d_state=16, d_conv=4, expand=4),
-                    mlp_cls=nn.Identity,
-                    norm_cls=partial(RMSNorm, eps=1e-5),
-                    fused_add_norm=False,
-                )
-            )
-            
-        if bidirectional:
-            self.backward_blocks = nn.ModuleList([])
-            for i in range(n_layer):
-                self.backward_blocks.append(
-                        Block(
-                        in_channels,
-                        mixer_cls=partial(Mamba, layer_idx=i, d_state=16, d_conv=4, expand=4),
-                        mlp_cls=nn.Identity,
-                        norm_cls=partial(RMSNorm, eps=1e-5),
-                        fused_add_norm=False,
-                    )
-                )
+        self.forward_mamba2 = Mamba2(
+            d_model=in_channels,  
+            d_state=128,  
+            d_conv=4,  
+            expand=4,
+            headdim=64,
+        )
 
-        self.apply(partial(_init_weights, n_layer=n_layer))
+        self.backward_mamba2 = Mamba2(
+            d_model=in_channels, 
+            d_state=128,  
+            d_conv=4, 
+            expand=4,  
+            headdim=64,
+        )
+    def forward(self, input):
+        forward_f = input
+        forward_f_output = self.forward_mamba2(forward_f)
+        backward_f = torch.flip(input, [1])
+        backward_f_output = self.backward_mamba2(backward_f)
+        backward_f_output2 = torch.flip(backward_f_output, [1])
+        output = torch.cat([forward_f_output + input, backward_f_output2+input], -1)
+        return output
+    
+class TAC(nn.Module):
+    """
+    A transform-average-concatenate (TAC) module.
+    """
+    def __init__(self, input_size, hidden_size):
+        super(TAC, self).__init__()
+        
+        self.input_size = input_size
+        self.eps = torch.finfo(torch.float32).eps
+        
+        self.input_norm = nn.GroupNorm(1, input_size, self.eps)
+        self.TAC_input = nn.Sequential(nn.Linear(input_size, hidden_size),
+                                       nn.Tanh()
+                                      )
+        self.TAC_mean = nn.Sequential(nn.Linear(hidden_size, hidden_size),
+                                      nn.Tanh()
+                                     )
+        self.TAC_output = nn.Sequential(nn.Linear(hidden_size*2, input_size),
+                                        nn.Tanh()
+                                       )
+        
+    def forward(self, input):
+        # input shape: batch, group, N, *
+        
+        batch_size, G, N = input.shape[:3]
+        output = self.input_norm(input.view(batch_size*G, N, -1)).view(batch_size, G, N, -1)
+        T = output.shape[-1]
+        
+        # transform
+        group_input = output  # B, G, N, T
+        group_input = group_input.permute(0,3,1,2).contiguous().view(-1, N)  # B*T*G, N
+        group_output = self.TAC_input(group_input).view(batch_size, T, G, -1)  # B, T, G, H
+        
+        # mean pooling
+        group_mean = group_output.mean(2).view(batch_size*T, -1)  # B*T, H
+        group_mean = self.TAC_mean(group_mean).unsqueeze(1).expand(batch_size*T, G, group_mean.shape[-1]).contiguous()  # B*T, G, H
+        
+        # concate
+        group_output = group_output.view(batch_size*T, G, -1)  # B*T, G, H
+        group_output = torch.cat([group_output, group_mean], 2)  # B*T, G, 2H
+        group_output = self.TAC_output(group_output.view(-1, group_output.shape[-1]))  # B*T*G, N
+        group_output = group_output.view(batch_size, T, G, -1).permute(0,2,3,1).contiguous()  # B, G, N, T
+        output = input + group_output.view(input.shape)
+        
+        return output
+
+class ResMamba(nn.Module):
+    def __init__(self, input_size, hidden_size, dropout=0., bidirectional=True):
+        super(ResMamba, self).__init__()
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.eps = torch.finfo(torch.float32).eps
+
+        self.norm = nn.GroupNorm(1, input_size, self.eps)
+        self.dropout = nn.Dropout(p=dropout)
+        self.rnn = MambaBlock(input_size)
+        self.proj = nn.Linear(input_size*2 ,input_size)
+        # linear projection layer
 
     def forward(self, input):
-        for_residual = None
-        forward_f = input.clone()
-        for block in self.forward_blocks:
-            print(forward_f.shape)
-            forward_f, for_residual = block(forward_f, for_residual, inference_params=None)
-        residual = (forward_f + for_residual) if for_residual is not None else forward_f
+        # input shape: batch, dim, seq
+        rnn_output =  self.rnn(self.dropout(self.norm(input)).transpose(1, 2).contiguous())
+        rnn_output = self.proj(rnn_output.contiguous().view(-1, rnn_output.shape[2])).view(input.shape[0],
+                                                                                           input.shape[2],
+                                                                                           input.shape[1])
 
-        if self.backward_blocks is not None:
-            back_residual = None
-            backward_f = torch.flip(input, [1])
-            for block in self.backward_blocks:
-                backward_f, back_residual = block(backward_f, back_residual, inference_params=None)
-            back_residual = (backward_f + back_residual) if back_residual is not None else backward_f
+        return input + rnn_output.transpose(1, 2).contiguous()
 
-            back_residual = torch.flip(back_residual, [1])
-            residual = torch.cat([residual, back_residual], -1)
-        
-        return residual
+class BSNet(nn.Module):
+    def __init__(self, in_channel, nband=7):
+        super(BSNet, self).__init__()
 
+        self.nband = nband
+        self.feature_dim = in_channel // nband
 
+        self.band_rnn = ResMamba(self.feature_dim, self.feature_dim*2)
+        self.band_comm = ResMamba(self.feature_dim, self.feature_dim*2)
+        self.channel_comm = TAC(self.feature_dim, self.feature_dim*3)
 
-class LayerNormalization4D(nn.Module):
-    def __init__(self, input_dimension, eps=1e-5):
-        super().__init__()
-        param_size = [1, input_dimension, 1, 1]
-        self.gamma = Parameter(torch.Tensor(*param_size).to(torch.float32))
-        self.beta = Parameter(torch.Tensor(*param_size).to(torch.float32))
-        init.ones_(self.gamma)
-        init.zeros_(self.beta)
-        self.eps = eps
+    def forward(self, input):
+        # input shape: B, nch, nband*N, T
+        B, nch, N, T = input.shape
 
-    def forward(self, x):
-        if x.ndim == 4:
-            _, C, _, _ = x.shape
-            stat_dim = (1,)
-        else:
-            raise ValueError("Expect x to have 4 dimensions, but got {}".format(x.ndim))
-        mu_ = x.mean(dim=stat_dim, keepdim=True)  # [B,1,T,F]
-        std_ = torch.sqrt(
-            x.var(dim=stat_dim, unbiased=False, keepdim=True) + self.eps
-        )  # [B,1,T,F]
-        x_hat = ((x - mu_) / std_) * self.gamma + self.beta
-        return x_hat
+        band_output = self.band_rnn(input.view(B*nch*self.nband, self.feature_dim, -1)).view(B*nch, self.nband, -1, T)
 
+        # band comm
+        band_output = band_output.permute(0,3,2,1).contiguous().view(B*nch*T, -1, self.nband)
+        output = self.band_comm(band_output).view(B*nch, T, -1, self.nband).permute(0,3,2,1).contiguous()
 
+        # channel comm
+        output = output.view(B, nch, self.nband, -1, T).transpose(1,2).contiguous().view(B*self.nband, nch, -1, T)
+        output = self.channel_comm(output).view(B, self.nband, nch, -1, T).transpose(1,2).contiguous()
 
+        return output.view(B, nch, N, T)
+    
+    
+class BSNet(nn.Module):
+    def __init__(self, in_channel, nband=7):
+        super(BSNet, self).__init__()
 
-class GridNetBlock(nn.Module):
+        self.nband = nband
+        self.feature_dim = in_channel // nband
+
+        self.band_rnn = ResMamba(self.feature_dim, self.feature_dim*2)
+        self.band_comm = ResMamba(self.feature_dim, self.feature_dim*2)
+        self.channel_comm = TAC(self.feature_dim, self.feature_dim*3)
+
+    def forward(self, input):
+        # input shape: B, nch, nband*N, T
+        B, nch, N, T = input.shape
+
+        band_output = self.band_rnn(input.view(B*nch*self.nband, self.feature_dim, -1)).view(B*nch, self.nband, -1, T)
+
+        # band comm
+        band_output = band_output.permute(0,3,2,1).contiguous().view(B*nch*T, -1, self.nband)
+        output = self.band_comm(band_output).view(B*nch, T, -1, self.nband).permute(0,3,2,1).contiguous()
+
+        # channel comm
+        output = output.view(B, nch, self.nband, -1, T).transpose(1,2).contiguous().view(B*self.nband, nch, -1, T)
+        output = self.channel_comm(output).view(B, self.nband, nch, -1, T).transpose(1,2).contiguous()
+
+        return output.view(B, nch, N, T)
+
+    
+class Separator(nn.Module):
     def __init__(
-        self,
-        emb_dim,
-        emb_ks,
-        emb_hs,
-        hidden_channels=192,
-        n_head=4,
-        approx_qk_dim=512,
-        activation="prelu",
-        eps=1e-5,
+        self, 
+        sr=44100, 
+        win=2048, 
+        stride=512, 
+        feature_dim=128, 
+        num_repeat_mask=8, 
+        num_repeat_map=4, 
+        num_output=4
     ):
-        super().__init__()
-        self.emb_dim = emb_dim
-        self.emb_ks = emb_ks
-        self.emb_hs = emb_hs
-        self.n_head = n_head
+        super(Separator, self).__init__()
         
-        in_channels = emb_dim * emb_ks
+        self.sr = sr
+        self.win = win
+        self.stride = stride
+        self.group = self.win // 2
+        self.enc_dim = self.win // 2 + 1
+        self.feature_dim = feature_dim
+        self.num_output = num_output
+        self.eps = torch.finfo(torch.float32).eps
         
-        self.intra_norm = LayerNormalization4D(emb_dim, eps=eps)
-        self.intra_mamba = MambaBlock(in_channels, 1, True)
-
-    def forward(self, x):
-        """
-
-        Args:
-            x: [B, N, T, F]
-            out: [B, N, T, F]
-        """
+        # 0-1k (50 hop), 1k-2k (100 hop), 2k-4k (250 hop), 4k-8k (500 hop), 8k-16k (1k hop), 16k-20k (2k hop), 20k-inf
+        bandwidth_50 = int(np.floor(50 / (sr / 2.) * self.enc_dim))
+        bandwidth_100 = int(np.floor(100 / (sr / 2.) * self.enc_dim))
+        bandwidth_250 = int(np.floor(250 / (sr / 2.) * self.enc_dim))
+        bandwidth_500 = int(np.floor(500 / (sr / 2.) * self.enc_dim))
+        bandwidth_1k = int(np.floor(1000 / (sr / 2.) * self.enc_dim))
+        bandwidth_2k = int(np.floor(2000 / (sr / 2.) * self.enc_dim))
+        self.band_width = [bandwidth_50]*20
+        self.band_width += [bandwidth_100]*10
+        self.band_width += [bandwidth_250]*8
+        self.band_width += [bandwidth_500]*8
+        self.band_width += [bandwidth_1k]*8
+        self.band_width += [bandwidth_2k]*2
+        self.band_width.append(self.enc_dim - np.sum(self.band_width))
+        self.nband = len(self.band_width)
+        # print(self.nband)
+        # print(self.band_width)
         
-        # B, C, old_T, old_Q = x.shape
-        # T = math.ceil((old_T - self.emb_ks) / self.emb_hs) * self.emb_hs + self.emb_ks
-        # Q = math.ceil((old_Q - self.emb_ks) / self.emb_hs) * self.emb_hs + self.emb_ks
-        # x = F.pad(x, (0, Q - old_Q, 0, T - old_T))
-        
-        B, N, T, Q = x.shape # N:Num_Band
-        input_ = x
-        intra_rnn = self.intra_norm(input_)  # [B, N, T, Q]
-        intra_rnn = (
-            intra_rnn.transpose(1, 2).contiguous().view(B * T, N, Q)
-        ) # [BT, N, Q]
-        print(intra_rnn.shape)
-        intra_rnn = F.unfold(
-            intra_rnn[..., None], (self.emb_ks, 1), stride=(self.emb_hs, 1)
-        )  # [BT, *emb_ks, -1]
-
-        intra_rnn = self.intra_mamba(intra_rnn)  # [BT, -1, H]    
-        intra_rnn = intra_rnn.transpose(1, 2)  # [BT, H, -1]
-        intra_rnn = self.intra_linear(intra_rnn)  # [BT, C, Q]
-        intra_rnn = intra_rnn.view([B, T, C, Q])
-        intra_rnn = intra_rnn.transpose(1, 2).contiguous()  # [B, C, T, Q]
-        intra_rnn = intra_rnn + input_  # [B, C, T, Q]
-
-        
-        return x
-    
-    
-    
-    
-    
-    
-class GridNetBlockOrig(nn.Module):
-    def __getitem__(self, key):
-        return getattr(self, key)
-
-    def __init__(
-        self,
-        emb_dim,
-        emb_ks,
-        emb_hs,
-        n_freqs,
-        hidden_channels,
-        n_head=4,
-        approx_qk_dim=512,
-        activation="prelu",
-        eps=1e-5,
-    ):
-        super().__init__()
-
-        in_channels = emb_dim * emb_ks
-
-        self.intra_norm = LayerNormalization4D(emb_dim, eps=eps)
-        self.intra_mamba = MambaBlock(in_channels, 1, True)
-        
-        self.intra_linear = nn.ConvTranspose1d(
-            in_channels * 2, emb_dim, emb_ks, stride=emb_hs
-        )
-        
-        self.inter_norm = LayerNormalization4D(emb_dim, eps=eps)
-        self.inter_mamba = MambaBlock(in_channels, 1, True)
-
-        self.inter_linear = nn.ConvTranspose1d(
-            in_channels * 2, emb_dim, emb_ks, stride=emb_hs
-        )
-
-        E = math.ceil(
-            approx_qk_dim * 1.0 / n_freqs
-        )  # approx_qk_dim is only approximate
-        assert emb_dim % n_head == 0
-        for ii in range(n_head):
-            self.add_module(
-                "attn_conv_Q_%d" % ii,
+        self.BN_mask = nn.ModuleList([])
+        for i in range(self.nband):
+            self.BN_mask.append(
                 nn.Sequential(
-                    nn.Conv2d(emb_dim, E, 1),
-                    get_layer(activation)(),
-                    LayerNormalization4DCF((E, n_freqs), eps=eps),
-                ),
+                    nn.GroupNorm(1, self.band_width[i]*2, self.eps),
+                    nn.Conv1d(self.band_width[i]*2, self.feature_dim, 1)
+                )
             )
-            self.add_module(
-                "attn_conv_K_%d" % ii,
+        self.BN_map = nn.ModuleList([])
+        for i in range(self.nband):
+            self.BN_map.append(
                 nn.Sequential(
-                    nn.Conv2d(emb_dim, E, 1),
-                    get_layer(activation)(),
-                    LayerNormalization4DCF((E, n_freqs), eps=eps),
-                ),
+                    nn.GroupNorm(1, self.band_width[i] * 2, self.eps),
+                    nn.Conv1d(self.band_width[i] * 2, self.feature_dim, 1)
+                )
             )
-            self.add_module(
-                "attn_conv_V_%d" % ii,
-                nn.Sequential(
-                    nn.Conv2d(emb_dim, emb_dim // n_head, 1),
-                    get_layer(activation)(),
-                    LayerNormalization4DCF((emb_dim // n_head, n_freqs), eps=eps),
-                ),
-            )
-        self.add_module(
-            "attn_concat_proj",
-            nn.Sequential(
-                nn.Conv2d(emb_dim, emb_dim, 1),
-                get_layer(activation)(),
-                LayerNormalization4DCF((emb_dim, n_freqs), eps=eps),
-            ),
-        )
 
-        self.emb_dim = emb_dim
-        self.emb_ks = emb_ks
-        self.emb_hs = emb_hs
-        self.n_head = n_head
-
-    def forward(self, x):
-        """GridNetBlock Forward.
-
-        Args:
-            x: [B, C, T, Q]
-            out: [B, C, T, Q]
-        """
-        B, C, old_T, old_Q = x.shape
-        T = math.ceil((old_T - self.emb_ks) / self.emb_hs) * self.emb_hs + self.emb_ks
-        Q = math.ceil((old_Q - self.emb_ks) / self.emb_hs) * self.emb_hs + self.emb_ks
-        x = F.pad(x, (0, Q - old_Q, 0, T - old_T))
-
-        # intra RNN
-        input_ = x
-        intra_rnn = self.intra_norm(input_)  # [B, C, T, Q]
-        intra_rnn = (
-            intra_rnn.transpose(1, 2).contiguous().view(B * T, C, Q)
-        )  # [BT, C, Q]
-        intra_rnn = F.unfold(
-            intra_rnn[..., None], (self.emb_ks, 1), stride=(self.emb_hs, 1)
-        )  # [BT, C*emb_ks, -1]
-        intra_rnn = intra_rnn.transpose(1, 2)  # [BT, -1, C*emb_ks]
-        intra_rnn = self.intra_mamba(intra_rnn)  # [BT, -1, H]
-        intra_rnn = intra_rnn.transpose(1, 2)  # [BT, H, -1]
-        intra_rnn = self.intra_linear(intra_rnn)  # [BT, C, Q]
-        intra_rnn = intra_rnn.view([B, T, C, Q])
-        intra_rnn = intra_rnn.transpose(1, 2).contiguous()  # [B, C, T, Q]
-        intra_rnn = intra_rnn + input_  # [B, C, T, Q]
-
-        # inter RNN
-        input_ = intra_rnn
-        inter_rnn = self.inter_norm(input_)  # [B, C, T, F]
-        inter_rnn = (
-            inter_rnn.permute(0, 3, 1, 2).contiguous().view(B * Q, C, T)
-        )  # [BF, C, T]
-        inter_rnn = F.unfold(
-            inter_rnn[..., None], (self.emb_ks, 1), stride=(self.emb_hs, 1)
-        )  # [BF, C*emb_ks, -1]
-        inter_rnn = inter_rnn.transpose(1, 2)  # [BF, -1, C*emb_ks]
-        inter_rnn = self.inter_mamba(inter_rnn)  # [BF, -1, H]
-        inter_rnn = inter_rnn.transpose(1, 2)  # [BF, H, -1]
-        inter_rnn = self.inter_linear(inter_rnn)  # [BF, C, T]
-        inter_rnn = inter_rnn.view([B, Q, C, T])
-        inter_rnn = inter_rnn.permute(0, 2, 3, 1).contiguous()  # [B, C, T, Q]
-        inter_rnn = inter_rnn + input_  # [B, C, T, Q]
-
-        # attention
-        inter_rnn = inter_rnn[..., :old_T, :old_Q]
-        batch = inter_rnn
-
-        all_Q, all_K, all_V = [], [], []
-        for ii in range(self.n_head):
-            all_Q.append(self["attn_conv_Q_%d" % ii](batch))  # [B, C, T, Q]
-            all_K.append(self["attn_conv_K_%d" % ii](batch))  # [B, C, T, Q]
-            all_V.append(self["attn_conv_V_%d" % ii](batch))  # [B, C, T, Q]
-
-        Q = torch.cat(all_Q, dim=0)  # [B', C, T, Q]
-        K = torch.cat(all_K, dim=0)  # [B', C, T, Q]
-        V = torch.cat(all_V, dim=0)  # [B', C, T, Q]
-
-        Q = Q.transpose(1, 2)
-        Q = Q.flatten(start_dim=2)  # [B', T, C*Q]
-        K = K.transpose(1, 2)
-        K = K.flatten(start_dim=2)  # [B', T, C*Q]
-        V = V.transpose(1, 2)  # [B', T, C, Q]
-        old_shape = V.shape
-        V = V.flatten(start_dim=2)  # [B', T, C*Q]
-        emb_dim = Q.shape[-1]
-
-        attn_mat = torch.matmul(Q, K.transpose(1, 2)) / (emb_dim**0.5)  # [B', T, T]
-        attn_mat = F.softmax(attn_mat, dim=2)  # [B', T, T]
-        V = torch.matmul(attn_mat, V)  # [B', T, C*Q]
-
-        V = V.reshape(old_shape)  # [B', T, C, Q]
-        V = V.transpose(1, 2)  # [B', C, T, Q]
-        emb_dim = V.shape[1]
-
-        batch = V.view([self.n_head, B, emb_dim, old_T, -1])  # [n_head, B, C, T, Q])
-        batch = batch.transpose(0, 1)  # [B, n_head, C, T, Q])
-        batch = batch.contiguous().view(
-            [B, self.n_head * emb_dim, old_T, -1]
-        )  # [B, C, T, Q])
-        batch = self["attn_concat_proj"](batch)  # [B, C, T, Q])
-
-        out = batch + inter_rnn
-        return out
-
-
+        self.separator_mask = []
+        for i in range(num_repeat_mask):
+            self.separator_mask.append(BSNet(self.nband*self.feature_dim, self.nband))
+        self.separator_mask = nn.Sequential(*self.separator_mask)
+        
+        self.separator_map = []
+        for i in range(num_repeat_map):
+            self.separator_map.append(BSNet(self.nband * self.feature_dim, self.nband))
+        self.separator_map = nn.Sequential(*self.separator_map)
+    
+    
+    
+    def forward(self, input):
+        
+        batch_size, nch, nsample = input.shape # input shape: (B, C, T)
+        input = input.view(batch_size*nch, -1)
+        
+        # STFT
+        spec = torch.stft(input, n_fft=self.win, hop_length=self.stride, 
+                          window=torch.hann_window(self.win).to(input.device).type(input.type()),
+                          return_complex=True)
+        
+        # concat real and imag, split to subbands
+        spec_RI = torch.stack([spec.real, spec.imag], 1)  # B*nch, 2, F, T
+        subband_spec_RI = []
+        subband_spec = []
+        band_idx = 0
+        for i in range(len(self.band_width)):
+            subband_spec_RI.append(spec_RI[:,:,band_idx:band_idx+self.band_width[i]].contiguous())
+            subband_spec.append(spec[:,band_idx:band_idx+self.band_width[i]])  # B*nch, BW, T
+            band_idx += self.band_width[i]
+        
+        # normalization and bottleneck
+        subband_feature_mask = []
+        for i in range(len(self.band_width)):
+            subband_feature_mask.append(self.BN_mask[i](subband_spec_RI[i].view(batch_size*nch, self.band_width[i]*2, -1)))
+        subband_feature_mask = torch.stack(subband_feature_mask, 1)  # B, nband, N, T
+         
+        subband_feature_map = []
+        for i in range(len(self.band_width)):
+             subband_feature_map.append(self.BN_map[i](subband_spec_RI[i].view(batch_size * nch, self.band_width[i] * 2, -1)))
+        subband_feature_map = torch.stack(subband_feature_map, 1)  # B, nband, N, T
+        
+        # separator
+        sep_output = checkpoint_sequential(self.separator_mask, 2, subband_feature_mask.view(batch_size, nch, self.nband*self.feature_dim, -1))  # B, nband*N, T
+        sep_output = sep_output.view(batch_size*nch, self.nband, self.feature_dim, -1)
+        return sep_output
 
 if __name__ == "__main__":
-    x = torch.randn(2, 64, 576, 128).to("cuda")
-    model = GridNetBlock(
-        emb_dim=64,
-        emb_ks=4,
-        emb_hs=1,
-    ).to("cuda")
+    x = torch.randn(4, 2, 44100)
+    device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+    x = x.to(device)
+    
+    model = Separator().to(device)
+    res = model(x)
+    print(res.shape)
 
-    y = model(x)
-
-    print(y.shape, x.shape)
+    
+    # with torch.no_grad():
+    #     macs, params = get_model_complexity_info(
+    #         model, (2, 44100), as_strings=False, print_per_layer_stat=True, verbose=False
+    #     )
+    # macs = macs/1e9
+    # params = params/1e6
+    # print(f"MACs: {macs}")
+    # print(f"Params: {params}")
+    
+    
