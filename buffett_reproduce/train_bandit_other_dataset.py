@@ -34,12 +34,14 @@ from data.moisesdb.datamodule import (
 
 
 # Init settings
-wandb_use = False # False
+wandb_use = True # False
 lr = 1e-3 #1e-4
 num_epochs = 500
-batch_size = 2 #4
+batch_size = 4 #4
+mix_query_mode = "Hyper_FiLM" # "Transformer"
 config_path = "config/train.yml"
-device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+mask_type = "L1"
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
 print("Training on device:", device)
 
 
@@ -55,10 +57,10 @@ if wandb_use:
     wandb.init(
         project="Query_ss",
         config={
-        "learning_rate": lr,
-        "architecture": "Self-Bandquet Using Other's dataset",
-        "dataset": "MoisesDB",
-        "epochs": num_epochs,
+            "learning_rate": lr,
+            "architecture": "Mamba-BandSplit Using Other's dataset",
+            "dataset": "MoisesDB",
+            "epochs": num_epochs,
         },
         notes="Bandit model",
     )
@@ -93,7 +95,7 @@ model = BandSplitMamba( #MyBandSplit(
 # Optimizer & Scheduler setup
 optimizer = optim.Adam(model.parameters(), lr=lr)
 scheduler = StepLR(optimizer, step_size=1, gamma=0.98)
-criterion = L1SNRDecibelMatchLoss() #L1SNR_Recons_Loss()
+criterion = L1SNRDecibelMatchLoss() # L1SNR_Recons_Loss(mask_type=mask_type) #
 
 
 early_stop_counter, early_stop_thres = 0, 4

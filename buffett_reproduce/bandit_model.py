@@ -414,16 +414,7 @@ class BandSplitMamba(BaseEndToEndModule):
             n_fft=n_fft,
             fs=fs,
         )
-        
-        
-        # self.instantiate_tf_modelling(
-        #     n_sqm_modules=n_sqm_modules,
-        #     emb_dim=emb_dim,
-        #     rnn_dim=rnn_dim,
-        #     bidirectional=bidirectional,
-        #     rnn_type=rnn_type,
-        # )
-        
+
 
         self.instantiate_mask_estim(
             in_channel=in_channel,
@@ -456,6 +447,8 @@ class BandSplitMamba(BaseEndToEndModule):
             eps=1.0e-5,
             emb_ks=4,
             emb_hs=1,
+            n_layer=6, #6,
+            bidirectional=True, #True,
         )
         
         
@@ -465,16 +458,25 @@ class BandSplitMamba(BaseEndToEndModule):
         eps=1.0e-5,
         emb_ks=4,
         emb_hs=1,
+        n_layer=6,
+        bidirectional=True,
     ):
         self.emb_ks = emb_ks
         self.emb_hs = emb_hs
         in_channels = emb_dim * emb_ks
 
         self.intra_norm = LayerNormalization4D(emb_dim, eps=eps)
-        self.intra_mamba = MambaBlock(in_channels=emb_dim, n_layer=1, bidirectional=False) # True
-        self.intra_linear = nn.ConvTranspose1d(
-            in_channels * 2, emb_dim, emb_ks, stride=emb_hs
+        self.intra_mamba = MambaBlock(in_channels=emb_dim, n_layer=n_layer, bidirectional=bidirectional)
+        self.intra_linear = nn.Conv1d(
+            in_channels=128,  # Input channels (C)
+            out_channels=128,  # Output channels (same as input in this case)
+            kernel_size=4,
+            stride=2,
+            padding=1
         )
+        # nn.ConvTranspose1d(
+        #     in_channels * 2, emb_dim, emb_ks, stride=emb_hs
+        # )
 
     def instantiate_bandsplit(
         self,
@@ -580,8 +582,7 @@ class BandSplitMamba(BaseEndToEndModule):
         z = self.band_split(x)  # (batch, emb_dim, n_band, n_time) # print(z.shape) # torch.Size([BS, 64, 576, 128])
         
         # Mamba Block
-        z = self.adapt_mamba(z)
-        # z = self.tf_model(z)  # (batch, emb_dim, n_band, n_time): Same size
+        z = self.adapt_mamba(z) # (batch, emb_dim, n_band, n_time): Same size
 
         return x, z, length
     
@@ -599,34 +600,41 @@ class BandSplitMamba(BaseEndToEndModule):
     
 
     def adapt_mamba(self, x):
-        B, C, n_band, old_time = x.shape
+        B, C, n_band, T = x.shape
 
         # No need for padding if Mamba2 can handle arbitrary sequence lengths
         # Apply normalization
-        input_ = x  # Shape: [B, C, n_band, old_time]
-        intra_rnn = self.intra_norm(input_)  # Shape: [B, C, n_band, old_time]
+        input_ = x  # Shape: [B, C, n_band, T] ([BS, 64, 576, 128])
+        intra_rnn = self.intra_norm(input_)  # Shape: [B, C, n_band, T]
 
         # Rearrange the tensor to merge batch and n_band dimensions
-        intra_rnn = intra_rnn.permute(0, 2, 1, 3).contiguous()  # [B, n_band, C, old_time]
-        intra_rnn = intra_rnn.view(B * n_band, C, old_time)  # [B * n_band, C, old_time]
+        intra_rnn = intra_rnn.permute(0, 2, 1, 3).contiguous()  # [B, n_band, C, T]
+        intra_rnn = intra_rnn.view(B * n_band, C, T)  # [B * n_band, C, T]
 
         # Transpose to get the sequence dimension first
-        intra_rnn = intra_rnn.transpose(1, 2)  # [B * n_band, old_time, C]
+        intra_rnn = intra_rnn.transpose(1, 2)  # [B * n_band, T, C]
 
         # Apply the Mamba block over the time dimension
-        intra_rnn = self.intra_mamba(intra_rnn)  # [B * n_band, old_time, C] ([1152, 128, 64])
-
-        # Transpose back to [B * n_band, C, old_time]
-        intra_rnn = intra_rnn.transpose(1, 2)  # [B * n_band, C, old_time]
-
+        # print("Before mamba:", intra_rnn.shape) # torch.Size([1152, 128, 64]) 
+        intra_rnn = self.intra_mamba(intra_rnn)  # [B * n_band, T, C] ([1152, 128, 64])
+        # print("After mamba:", intra_rnn.shape) # Bidirection: torch.Size([1152, 128, 128])
+        
+        
+        # Transpose back to [B * n_band, C, T]
+        intra_rnn = intra_rnn.transpose(1, 2)  # [B * n_band, C, 2*T]
+        
+        # Intra Linear Conv1D
+        intra_rnn = self.intra_linear(intra_rnn)  # [BT, C, Q]
+        # print("After Linear:", intra_rnn.shape) # After Linear: torch.Size([1152, 128, 64])
+        
         # Reshape back to original dimensions
-        intra_rnn = intra_rnn.view(B, n_band, C, old_time)  # [B, n_band, C, old_time]
+        intra_rnn = intra_rnn.view(B, n_band, C, T)  # [B, n_band, C, T]
 
-        # Permute to get back to [B, C, n_band, old_time]
-        intra_rnn = intra_rnn.permute(0, 2, 1, 3).contiguous()  # [B, C, n_band, old_time]
+        # Permute to get back to [B, C, n_band, T]
+        intra_rnn = intra_rnn.permute(0, 2, 1, 3).contiguous()  # [B, C, n_band, T]
 
         # Add the residual connection
-        intra_rnn = intra_rnn + input_  # [B, C, n_band, old_time]
+        intra_rnn = intra_rnn + input_  # [B, C, n_band, T]
 
         return intra_rnn
 
