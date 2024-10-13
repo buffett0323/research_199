@@ -157,6 +157,34 @@ class L1SNR_Recons_Loss(_Loss):
 
 
 
+class MAELoss(_Loss):
+    def __init__(self, num_output):
+        super().__init__()
+        self.num_output = num_output
+    
+    def compute_loss(Si, S_hat_i):
+        """Compute the loss for one source."""
+        # Real and imaginary parts of the spectrograms
+        R_hat_i = S_hat_i.real
+        I_hat_i = S_hat_i.imag
+        R_i = Si.real
+        I_i = Si.imag
+        
+        # Frequency-domain loss (MAE)
+        freq_loss = F.l1_loss(R_i, R_hat_i) + F.l1_loss(I_i, I_hat_i)
+        
+        # Time-domain loss (MAE via ISTFT)
+        time_loss = F.l1_loss(torch.istft(Si, n_fft=2048), torch.istft(S_hat_i, n_fft=2048))
+        
+        return freq_loss + time_loss
+
+    def forward(self, S, S_hat):
+        loss_stage1 = sum(self.compute_loss(S[i], S_hat['stage1'][i]) for i in range(self.num_output))
+        loss_stage2 = sum(self.compute_loss(S[i], S_hat['stage2'][i]) for i in range(self.num_output))
+        
+        return loss_stage1 + loss_stage2
+
+
 
 
 if __name__ == "__main__":

@@ -7,6 +7,9 @@ import numpy as np
 from torch.utils.checkpoint import checkpoint_sequential
 from mamba.mamba_ssm.modules.mamba2 import Mamba2
 from ptflops import get_model_complexity_info
+from conditioning import FiLM, Hyper_FiLM, FiLMHyperNetwork
+from models.e2e.querier.passt import Passt
+
 
 class MambaBlock(nn.Module):
     def __init__(self, in_channels):
@@ -135,14 +138,17 @@ class BSNet(nn.Module):
     
 class Separator(nn.Module):
     def __init__(
-        self, 
+        self,
+        embedding_size=768,
+        query_size=512,
         sr=44100, 
         win=2048, 
         stride=512, 
         feature_dim=128, # N
         num_repeat_mask=4, #8, 
         num_repeat_map=2, #4, 
-        num_output=4
+        num_output=2, #4,
+        mix_query_mode="FiLM", #"Hyper_FiLM",
     ):
         super(Separator, self).__init__()
         
@@ -154,6 +160,37 @@ class Separator(nn.Module):
         self.feature_dim = feature_dim
         self.num_output = num_output
         self.eps = torch.finfo(torch.float32).eps
+        
+        self.mix_query_mode = mix_query_mode
+        self.embedding_size = embedding_size
+        self.query_size = query_size
+        
+        self.query_encoder = Passt(
+            original_fs=sr,
+            passt_fs=32000,
+        )
+        
+        if self.mix_query_mode == "FiLM":
+            self.condition = FiLM(
+                cond_embedding_dim=embedding_size, #768,
+                channels=feature_dim, # 128, #query_size, #512, 
+                additive=True, 
+                multiplicative=True
+            )
+        elif self.mix_query_mode == "Hyper_FiLM":
+            hypernet = FiLMHyperNetwork(
+                query_dim=embedding_size, #768,
+                channels=feature_dim, # 128, #query_size, #512, 
+                depth=2, 
+                activation="ELU"
+            )
+            self.condition = Hyper_FiLM(
+                cond_embedding_dim=embedding_size, #768,
+                channels=feature_dim, # 128, #query_size, #512, 
+                hypernetwork=hypernet, 
+                additive=True, 
+                multiplicative=True
+            )
         
         # 0-1k (50 hop), 1k-2k (100 hop), 2k-4k (250 hop), 4k-8k (500 hop), 8k-16k (1k hop), 16k-20k (2k hop), 20k-inf
         bandwidth_50 = int(np.floor(50 / (sr / 2.) * self.enc_dim))
@@ -224,7 +261,10 @@ class Separator(nn.Module):
                     )
                 )
     
-    def forward(self, input):
+    
+    def forward(self, input, query):
+        # Get information
+        # input, query = batch.mixture.audio, batch.query.audio
         
         batch_size, nch, nsample = input.shape # input shape: (B, C, T)
         input = input.view(batch_size*nch, -1)
@@ -264,21 +304,90 @@ class Separator(nn.Module):
         combined = self.Tanh(self.in_conv(combined))
         combined = combined.reshape(batch_size * nch, self.nband,self.feature_dim,-1)
         sep_output2 = checkpoint_sequential(self.separator_map, 2, combined.view(batch_size, nch, self.nband*self.feature_dim, -1), use_reentrant=False)  # 1B, nband*N, T
-        sep_output2 = sep_output2.view(batch_size * nch, self.nband, self.feature_dim, -1)
+        sep_output2 = sep_output2.view(batch_size * nch, self.nband, self.feature_dim, -1) # B, nband, N, T -> torch.Size([2, 57, 128, T(576)])
+
+        # Added 
+        sep_output2 = torch.permute(sep_output2, (0, 2, 1, 3)) # (B, n_band, N, T) -> (B, N, n_band, T)
         
+        # Query Encoder
+        Z = self.query_encoder(query) # (B, 768)
         
-        return sep_output2
+        # FiLM Condition
+        if self.mix_query_mode == "FiLM":
+            sep_output2 = self.condition(sep_output2, Z) # BF: torch.Size([B, 128, 57, T]) torch.Size([BS, 768]) -> torch.Size([BS, 128, 57, T])
+            sep_output2 = torch.permute(sep_output2, (0, 2, 1, 3)) # -> (B, n_band, N, T)
+            print("After FiLM:", sep_output2.shape)
+
+        # Hyper Network FiLM Condition + MLP            
+        elif self.mix_query_mode == "Hyper_FiLM":
+            sep_output2 = self.condition(sep_output2, Z) # BF: torch.Size([B, 128, 57, T]) torch.Size([BS, 768]) -> torch.Size([BS, 128, 57, T])
+            sep_output2 = torch.permute(sep_output2, (0, 2, 1, 3)) # -> (B, n_band, N, T)
+
+        # Separate in each subband
+        sep_subband_spec = []
+        sep_subband_spec_mask = []
+        for i in range(self.nband):
+            this_output = self.mask[i](sep_output[:,i]).view(batch_size*nch, 2, 2, self.num_output, self.band_width[i], -1)
+            this_mask = this_output[:,0] * torch.sigmoid(this_output[:,1])  # B*nch, 2, K, BW, T
+            this_mask_real = this_mask[:,0]  # B*nch, K, BW, T
+            this_mask_imag = this_mask[:,1]  # B*nch, K, BW, T
+            # force mask sum to 1
+            this_mask_real_sum = this_mask_real.sum(1).unsqueeze(1)  # B*nch, 1, BW, T
+            this_mask_imag_sum = this_mask_imag.sum(1).unsqueeze(1)  # B*nch, 1, BW, T
+            this_mask_real = this_mask_real - (this_mask_real_sum - 1) / self.num_output
+            this_mask_imag = this_mask_imag - this_mask_imag_sum / self.num_output
+            est_spec_real = subband_spec[i].real.unsqueeze(1) * this_mask_real - subband_spec[i].imag.unsqueeze(1) * this_mask_imag  # B*nch, K, BW, T
+            est_spec_imag = subband_spec[i].real.unsqueeze(1) * this_mask_imag + subband_spec[i].imag.unsqueeze(1) * this_mask_real  # B*nch, K, BW, T
+            
+            ##################################
+            this_output2 = self.map[i](sep_output2[:,i]).view(batch_size*nch, 2, 2, self.num_output, self.band_width[i], -1)
+            this_map = this_output2[:,0] * torch.sigmoid(this_output2[:,1])  # B*nch, 2, K, BW, T
+            this_map_real = this_map[:,0]  # B*nch, K, BW, T
+            this_map_imag = this_map[:,1]  # B*nch, K, BW, T
+            est_spec_real2 = est_spec_real+this_map_real
+            est_spec_imag2 = est_spec_imag+this_map_imag
+
+            sep_subband_spec.append(torch.complex(est_spec_real2, est_spec_imag2))
+            sep_subband_spec_mask.append(torch.complex(est_spec_real, est_spec_imag))
+        
+        sep_subband_spec = torch.cat(sep_subband_spec, 2)
+        est_spec_mask = torch.cat(sep_subband_spec_mask, 2)
+
+        output = torch.istft(
+            sep_subband_spec.view(batch_size*nch*self.num_output, self.enc_dim, -1), 
+            n_fft=self.win, 
+            hop_length=self.stride, 
+            window=torch.hann_window(self.win).to(input.device).type(input.type()), 
+            length=nsample
+        )
+        output_mask = torch.istft(
+            est_spec_mask.view(batch_size*nch*self.num_output, self.enc_dim, -1),
+            n_fft=self.win, 
+            hop_length=self.stride,
+            window=torch.hann_window(self.win).to(input.device).type(input.type()), 
+            length=nsample
+        )
+
+        output = output.view(batch_size, nch, self.num_output, -1).transpose(1,2).contiguous()
+        output_mask = output_mask.view(batch_size, nch, self.num_output, -1).transpose(1,2).contiguous()
+        return output, output_mask
+        
 
 
 
 if __name__ == "__main__":
-    x = torch.randn(1, 2, 44100)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    x = x.to(device)
     
-    model = Separator().to(device)
-    res = model(x)
-    print(res.shape)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    Batch_Size = 1
+    x = torch.randn(Batch_Size, 2, 294400).to(device)
+    query = torch.randn(Batch_Size, 2, 441000).to(device)
+    
+    
+    model = Separator(
+        mix_query_mode="Hyper_FiLM"    
+    ).to(device)
+    output, output_mask = model(x, query)
+    print(output.shape, output_mask.shape)
 
     
     # with torch.no_grad():
