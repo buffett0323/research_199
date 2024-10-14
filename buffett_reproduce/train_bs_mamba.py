@@ -8,16 +8,20 @@ from tqdm import tqdm
 from typing import Optional
 from torch.optim.lr_scheduler import StepLR
 from torch.utils.data import DataLoader
+from torch.nn.utils import clip_grad_norm_
 from mir_eval.separation import bss_eval_sources
 from sklearn.model_selection import train_test_split
 
 
 
 from enrollment_model import MyModel
+from mamba_model import Separator
 # from load_data import BEATS_path, ORIG_mixture, ORIG_target #, stems
 # from dataset import MusicDataset
-from loss import L1SNR_Recons_Loss, L1SNRDecibelMatchLoss
-from utils import _load_config
+from loss import L1SNR_Recons_Loss, L1SNRDecibelMatchLoss, MAELoss
+from utils import (
+    _load_config, audio_to_complex_spectrogram, get_non_stem_audio
+)
 from metrics import (
     AverageMeter, cal_metrics, safe_signal_noise_ratio, MetricHandler
 )
@@ -56,15 +60,14 @@ Dataset Structure:
 wandb_use = False # False
 lr = 1e-3 # 1e-4
 num_epochs = 500
-batch_size = 2 # 8
-n_srcs = 1
+batch_size = 1 # 8
 emb_dim = 768 # For BEATs
-query_size = 512 # 512
+query_size = 128 # 512
 mix_query_mode = "Hyper_FiLM" # "Transformer"
 q_enc = "Passt"
 config_path = "config/train.yml"
 mask_type = "L1"
-device = torch.device('cuda:3' if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print("Training on device:", device)
 
 
@@ -80,7 +83,7 @@ if wandb_use:
         project="Query_ss",
         config={
             "learning_rate": lr,
-            "architecture": "Transformer_UNet Using 9 stems",
+            "architecture": "Band Split Using 9 stems",
             "dataset": "MoisesDB",
             "epochs": num_epochs,
         },
@@ -105,19 +108,18 @@ datamodule = MoisesDataModule(
 
 
 # Instantiate the enrollment model
-model = MyModel(
-    embedding_size=emb_dim, 
-    query_size=query_size,
-    n_masks=n_srcs,
-    mix_query_mode=mix_query_mode,
-    q_enc=q_enc,
+model = Separator(
+    mix_query_mode="Hyper_FiLM"    
 ).to(device)
 
 
 # Optimizer & Scheduler setup
 optimizer = optim.Adam(model.parameters(), lr=lr)
-scheduler = StepLR(optimizer, step_size=1, gamma=0.98)
-criterion = L1SNR_Recons_Loss(mask_type=mask_type)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.8, patience=2) # scheduler = StepLR(optimizer, step_size=1, gamma=0.98)
+
+# Gradient clipping norm
+max_grad_norm = 5
+criterion = MAELoss() #L1SNR_Recons_Loss(mask_type=mask_type)
 
 
 early_stop_counter, early_stop_thres = 0, 4
@@ -135,18 +137,32 @@ for epoch in tqdm(range(num_epochs)):
         optimizer.zero_grad()
         
         # Forward pass
-        batch = model(batch)
-
+        S_hat_stage1, S_hat_stage2, output, output_mask = model(batch.mixture.audio, batch.query.audio)
+        # print(output.shape, output_mask.shape) # BS, num_channels, num_output, length
+        
         # Compute the loss
-        loss = criterion(batch)
-        # loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+        non_tar_audio = get_non_stem_audio(batch.mixture.audio, batch.sources.target.audio).to(device)
+        tar = audio_to_complex_spectrogram(batch.sources.target.audio).unsqueeze(1)
+        non_tar = audio_to_complex_spectrogram(non_tar_audio).unsqueeze(1)
+        
+        S = torch.concat((tar, non_tar), dim=1).to(device)
+        S_audio = torch.concat((batch.sources.target.audio.unsqueeze(1), non_tar_audio.unsqueeze(1)), dim=1).to(device)
+        
+        loss = criterion(S, S_audio, S_hat_stage1, S_hat_stage2, output, output_mask)
         train_loss += loss.item()
+        print(loss.item())
         
         # Backward pass and optimization
         loss.backward()
+        
+        # Gradient clipping
+        clip_grad_norm_(model.parameters(), max_grad_norm)
+        
         optimizer.step()
-    
-    scheduler.step()
+    #     break
+    # break
+
+    scheduler.step(train_loss)
 
 
     # Validation step
@@ -195,38 +211,38 @@ for epoch in tqdm(range(num_epochs)):
             wandb.log({"train_loss": train_loss})
 
     
+ 
+# # Test step after all epochs
+# model.eval()
+# test_loss = 0.0
+# test_metric_handler = MetricHandler(stems)
+
+
+# with torch.no_grad():
+#     for batch in tqdm(datamodule.test_dataloader()):
+#         batch = InputType.from_dict(batch)
+#         batch = to_device(batch)
     
-# Test step after all epochs
-model.eval()
-test_loss = 0.0
-test_metric_handler = MetricHandler(stems)
+#         # Forward pass
+#         batch = model(batch)
 
+#         # Compute the loss
+#         loss = criterion(batch)
+#         # loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+#         test_loss += loss.item()
 
-with torch.no_grad():
-    for batch in tqdm(datamodule.test_dataloader()):
-        batch = InputType.from_dict(batch)
-        batch = to_device(batch)
-    
-        # Forward pass
-        batch = model(batch)
+#         # Calculate metrics
+#         test_metric_handler.calculate_snr(batch.estimates["target"].audio, batch.sources["target"].audio, batch.metadata.stem)
 
-        # Compute the loss
-        loss = criterion(batch)
-        # loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
-        test_loss += loss.item()
-
-        # Calculate metrics
-        test_metric_handler.calculate_snr(batch.estimates["target"].audio, batch.sources["target"].audio, batch.metadata.stem)
-
-    # Get the final result of test SNR
-    test_snr = test_metric_handler.get_mean_median()
-    print("Test snr:", test_snr)
+#     # Get the final result of test SNR
+#     test_snr = test_metric_handler.get_mean_median()
+#     print("Test snr:", test_snr)
         
         
-print(f"Final Test Loss: {test_loss}")
-if wandb_use:
-    wandb.log({"test_loss": test_loss})
-    wandb.log(test_snr)
+# print(f"Final Test Loss: {test_loss}")
+# if wandb_use:
+#     wandb.log({"test_loss": test_loss})
+#     wandb.log(test_snr)
     
 
-if wandb_use: wandb.finish()
+# if wandb_use: wandb.finish()

@@ -9,7 +9,8 @@ from mamba.mamba_ssm.modules.mamba2 import Mamba2
 from ptflops import get_model_complexity_info
 from conditioning import FiLM, Hyper_FiLM, FiLMHyperNetwork
 from models.e2e.querier.passt import Passt
-
+from loss import L1SNR_Recons_Loss, L1SNRDecibelMatchLoss, MAELoss
+from utils import audio_to_complex_spectrogram
 
 class MambaBlock(nn.Module):
     def __init__(self, in_channels):
@@ -351,8 +352,9 @@ class Separator(nn.Module):
             sep_subband_spec_mask.append(torch.complex(est_spec_real, est_spec_imag))
         
         sep_subband_spec = torch.cat(sep_subband_spec, 2)
-        est_spec_mask = torch.cat(sep_subband_spec_mask, 2)
+        sep_subband_spec_mask = torch.cat(sep_subband_spec_mask, 2)
 
+        # Inference
         output = torch.istft(
             sep_subband_spec.view(batch_size*nch*self.num_output, self.enc_dim, -1), 
             n_fft=self.win, 
@@ -361,7 +363,7 @@ class Separator(nn.Module):
             length=nsample
         )
         output_mask = torch.istft(
-            est_spec_mask.view(batch_size*nch*self.num_output, self.enc_dim, -1),
+            sep_subband_spec_mask.view(batch_size*nch*self.num_output, self.enc_dim, -1),
             n_fft=self.win, 
             hop_length=self.stride,
             window=torch.hann_window(self.win).to(input.device).type(input.type()), 
@@ -370,7 +372,10 @@ class Separator(nn.Module):
 
         output = output.view(batch_size, nch, self.num_output, -1).transpose(1,2).contiguous()
         output_mask = output_mask.view(batch_size, nch, self.num_output, -1).transpose(1,2).contiguous()
-        return output, output_mask
+        
+        return sep_subband_spec.view(batch_size, nch, self.num_output, self.enc_dim, -1), \
+                sep_subband_spec_mask.view(batch_size, nch, self.num_output, self.enc_dim, -1), \
+                output, output_mask
         
 
 
@@ -382,13 +387,26 @@ if __name__ == "__main__":
     x = torch.randn(Batch_Size, 2, 294400).to(device)
     query = torch.randn(Batch_Size, 2, 441000).to(device)
     
+    S_tar = torch.randn(Batch_Size, 2, 294400)
+    S_non_tar = torch.randn(Batch_Size, 2, 294400)
+    Spec_S_tar = audio_to_complex_spectrogram(S_tar).unsqueeze(0)
+    Spec_S_non_tar = audio_to_complex_spectrogram(S_non_tar).unsqueeze(0)
+    S = torch.concat((Spec_S_tar, Spec_S_non_tar), dim=0).to(device)
+    print(Spec_S_tar.shape, Spec_S_non_tar.shape, S.shape)
     
     model = Separator(
         mix_query_mode="Hyper_FiLM"    
     ).to(device)
-    output, output_mask = model(x, query)
+    
+    S_hat_stage1, S_hat_stage2, output, output_mask = model(x, query)
     print(output.shape, output_mask.shape)
+    print(S_hat_stage1.shape, S_hat_stage2.shape)
+    print(S_hat_stage1[0].real)
+    print(S_hat_stage1[0].imag)
 
+    criterion = MAELoss(num_output=2)
+    loss = criterion(S, S_hat_stage1, S_hat_stage2)
+    print(loss.item())
     
     # with torch.no_grad():
     #     macs, params = get_model_complexity_info(

@@ -158,30 +158,39 @@ class L1SNR_Recons_Loss(_Loss):
 
 
 class MAELoss(_Loss):
-    def __init__(self, num_output):
+    def __init__(self, num_output=2, n_fft=2048, hop_length=512):
         super().__init__()
         self.num_output = num_output
-    
-    def compute_loss(Si, S_hat_i):
-        """Compute the loss for one source."""
-        # Real and imaginary parts of the spectrograms
-        R_hat_i = S_hat_i.real
-        I_hat_i = S_hat_i.imag
-        R_i = Si.real
-        I_i = Si.imag
-        
-        # Frequency-domain loss (MAE)
-        freq_loss = F.l1_loss(R_i, R_hat_i) + F.l1_loss(I_i, I_hat_i)
+        self.n_fft = n_fft
+        self.hop_length = hop_length
+
+    def compute_loss(self, Si, S_hat_i, S_audio_i, S_audio_hat_i):
+        """
+        Compute the loss for one source.
+        Si and S_hat_i are tensors with shape [Batch_size, num_channels, 2, T, F],
+        where the 3rd dimension (2) is for real and imaginary parts.
+        """
+        # The tensors Si and S_hat_i are already complex
+        # Frequency-domain loss (MAE) for complex spectrogram
+        freq_loss = F.l1_loss(Si.real, S_hat_i.real) + F.l1_loss(Si.imag, S_hat_i.imag)
         
         # Time-domain loss (MAE via ISTFT)
-        time_loss = F.l1_loss(torch.istft(Si, n_fft=2048), torch.istft(S_hat_i, n_fft=2048))
+        time_loss = F.l1_loss(S_audio_i, S_audio_hat_i)
         
         return freq_loss + time_loss
 
-    def forward(self, S, S_hat):
-        loss_stage1 = sum(self.compute_loss(S[i], S_hat['stage1'][i]) for i in range(self.num_output))
-        loss_stage2 = sum(self.compute_loss(S[i], S_hat['stage2'][i]) for i in range(self.num_output))
+    def forward(self, S, S_audio, S_hat_stage1, S_hat_stage2, output, output_mask):
+        """
+        Forward pass to compute the total loss.
+        S: Ground truth spectrograms of shape [Batch_size, num_channels, 2, T, F]
+        S_hat_stage1: Predicted spectrograms from stage 1 of shape [Batch_size, num_channels, 2, T, F]
+        S_hat_stage2: Predicted spectrograms from stage 2 of shape [Batch_size, num_channels, 2, T, F]
+        """
+        # Compute loss for both stages
+        loss_stage1 = sum(self.compute_loss(S[:, i], S_hat_stage1[:, i], S_audio[:, i], output[:,:, i]) for i in range(self.num_output))
+        loss_stage2 = sum(self.compute_loss(S[:, i], S_hat_stage2[:, i], S_audio[:, i], output_mask[:,:, i]) for i in range(self.num_output))
         
+        # Return the total loss
         return loss_stage1 + loss_stage2
 
 
