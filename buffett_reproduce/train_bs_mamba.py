@@ -60,10 +60,10 @@ Dataset Structure:
 wandb_use = False # False
 lr = 1e-3 # 1e-4
 num_epochs = 500
-batch_size = 1 # 8
+batch_size = 2 # 8
 emb_dim = 768 # For BEATs
 query_size = 128 # 512
-mix_query_mode = "Hyper_FiLM" # "Transformer"
+mix_query_mode = "FiLM"
 q_enc = "Passt"
 config_path = "config/train.yml"
 mask_type = "L1"
@@ -109,6 +109,8 @@ datamodule = MoisesDataModule(
 
 # Instantiate the enrollment model
 model = Separator(
+    num_repeat_mask=2, #8, 
+    num_repeat_map=2, #4,
     mix_query_mode="Hyper_FiLM"    
 ).to(device)
 
@@ -159,7 +161,7 @@ for epoch in tqdm(range(num_epochs)):
         clip_grad_norm_(model.parameters(), max_grad_norm)
         
         optimizer.step()
-    #     break
+        # break
     # break
 
     scheduler.step(train_loss)
@@ -175,16 +177,25 @@ for epoch in tqdm(range(num_epochs)):
                 batch = InputType.from_dict(batch)
                 batch = to_device(batch)
                 
+                optimizer.zero_grad()
+                
                 # Forward pass
-                batch = model(batch)
-
+                S_hat_stage1, S_hat_stage2, output, output_mask = model(batch.mixture.audio, batch.query.audio)
+                # print(output.shape, output_mask.shape) # BS, num_channels, num_output, length
+                
                 # Compute the loss
-                loss = criterion(batch)
-                # loss = criterion(batch.estimates["target"].audio, batch.sources["target"].audio) # Y_Pred, Y_True
+                non_tar_audio = get_non_stem_audio(batch.mixture.audio, batch.sources.target.audio).to(device)
+                tar = audio_to_complex_spectrogram(batch.sources.target.audio).unsqueeze(1)
+                non_tar = audio_to_complex_spectrogram(non_tar_audio).unsqueeze(1)
+                
+                S = torch.concat((tar, non_tar), dim=1).to(device)
+                S_audio = torch.concat((batch.sources.target.audio.unsqueeze(1), non_tar_audio.unsqueeze(1)), dim=1).to(device)
+                
+                loss = criterion(S, S_audio, S_hat_stage1, S_hat_stage2, output, output_mask)
                 val_loss += loss.item()
 
                 # Calculate metrics
-                val_metric_handler.calculate_snr(batch.estimates["target"].audio, batch.sources["target"].audio, batch.metadata.stem)
+                val_metric_handler.calculate_snr(output_mask[:,:,0,:].squeeze(2), batch.sources.target.audio, batch.metadata.stem)
 
             # Record the validation SNR
             val_snr = val_metric_handler.get_mean_median()

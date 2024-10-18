@@ -24,6 +24,7 @@ from models.types import InputType, OperationMode, SimpleishNamespace
 from beats.BEATs import BEATs, BEATsConfig
 
 from unet import UnetIquery
+from utils import _load_config
 from functools import partial
 from mamba_ssm import Mamba
 from mamba.mamba_ssm.modules.mamba2 import Mamba2
@@ -718,3 +719,17 @@ class LayerNormalization4D(nn.Module):
         )  # [B,1,T,F]
         x_hat = ((x - mu_) / std_) * self.gamma + self.beta
         return x_hat
+    
+    
+if __name__ == "__main__":
+    
+    config_path = "config/train.yml"
+    config = _load_config(config_path)
+    stems = config.data.train_kwargs.allowed_stems
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    model_kwargs = config.model.get("kwargs", {})
+    model = MyBandSplit( #BandSplitMamba( #
+        **model_kwargs,
+        stems=stems,
+    ).to(device)
